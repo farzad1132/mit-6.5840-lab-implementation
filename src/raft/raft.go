@@ -58,6 +58,48 @@ const (
 	Leader    State = "Leader"
 )
 
+type LogEntry struct {
+	Term    int
+	Index   int
+	Command interface{}
+}
+
+type Log struct {
+	Entries []*LogEntry
+}
+
+func (l *Log) Add(command interface{}, term, me int) bool {
+	entry := LogEntry{
+		Term:    term,
+		Command: command,
+		Index:   len(l.Entries) + 1,
+	}
+	l.Entries = append(l.Entries, &entry)
+	debug.Debug(debug.DLog, me, "Added command:%v with term:%v to index:%v", command, term, len(l.Entries))
+	return true
+}
+
+func (l *Log) Get(index int) (*LogEntry, bool) {
+	if index > len(l.Entries) || index < 1 {
+		return nil, false
+	}
+	return l.Entries[index-1], true
+}
+
+func (l *Log) GetLast() *LogEntry {
+	if len(l.Entries) < 1 {
+		return nil
+	}
+	return l.Entries[len(l.Entries)-1]
+}
+
+func (l *Log) DeleteFrom(index, me int) {
+	// TODO: Check if it works properly
+	debug.Debug(debug.DLog, me, "Deleting Entries from index:%v.", index)
+	l.Entries = l.Entries[:index-1]
+	debug.Debug(debug.DTest, me, "Entries: %+v.", l.Entries)
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -73,11 +115,17 @@ type Raft struct {
 
 	currentTerm int
 	votedFor    int // peer's index (-1 means no vote)
-	log         []interface{}
+	log         Log
 	commitIndex int
 	lastApplied int
 	nextIndex   []int
 	matchIndex  []int
+
+	lastLeaderPing      time.Time         // used for election timeout
+	lastInstanceContact map[int]time.Time // used for sending AppendEntry RPC
+
+	// Control channel for notifying the main goroutine. Only the main goroutine should read from this.
+	controlCh chan State
 }
 
 // return currentTerm and whether this server
@@ -166,40 +214,44 @@ type RequestVoteReply struct {
 }
 
 // example RequestVote RPC handler.
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) error {
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	debug.Debug(debug.DInfo, rf.me, "RequestVote from %v", args.CandidateId)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
-
 	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
-		debug.Debug(debug.DVote, rf.me, "Old Term, vote rejected.")
-		return nil
+		debug.Debug(debug.DVote, rf.me, "Old Term (%v < %v), vote rejected.", args.Term, rf.currentTerm)
+		return
 	} else if rf.currentTerm < args.Term {
+		// Fallback to Follower
 		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", args.Term, rf.currentTerm)
-		defer DiscoverHigherTerm(rf, args.Term)
+		DiscoverHigherTerm(rf, args.Term)
 	}
 
+	reply.Term = rf.currentTerm
+
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		if CheckLogIsUpToDate(rf.currentTerm, rf.commitIndex, args.Term, args.LastLogIndex) {
+		if CheckLogIsUpToDate(rf, args.LastLogTerm, args.LastLogIndex) {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateId
-			debug.Debug(debug.DVote, rf.me, "Vote granted.")
+			ResetElectionTimer(rf)
+			debug.Debug(debug.DVote, rf.me, "Vote granted to %v.", args.CandidateId)
 		} else {
 			reply.VoteGranted = false
-			// TODO: check this line
+			// TODO: check this line (for the scenario that you have voted for a candidate but their log now
+			// is not up-to-date)
 			rf.votedFor = -1
-			debug.Debug(debug.DVote, rf.me, "Log is not up-to-date, vote rejected.")
+			debug.Debug(debug.DVote, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%+v)), vote rejected.",
+				args.LastLogIndex, args.LastLogTerm, rf.log.GetLast())
 		}
 	} else {
 		reply.VoteGranted = false
-		debug.Debug(debug.DVote, rf.me, "Voted another instance, vote rejected.")
+		debug.Debug(debug.DVote, rf.me, "Voted another instance (%v), vote rejected for %v.",
+			rf.votedFor, args.CandidateId)
 	}
-	return nil
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -229,8 +281,181 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) erro
 // capitalized all field names in structs passed over RPC, and
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, ch chan int) bool {
+	ok := false
+
+	for !ok && !rf.killed() {
+		// Check if conditions are met.
+		rf.mu.Lock()
+		if rf.state != Candidate || rf.currentTerm != args.Term {
+			rf.mu.Unlock()
+			return false
+		}
+		rf.mu.Unlock()
+		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
+	}
+	debug.Debug(debug.DInfo, rf.me, "Received RequestVote response from %v.", server)
+
+	// Caller procedure
+	rf.mu.Lock()
+	//defer rf.mu.Unlock()
+
+	// Check if there are greater Terms
+	if reply.Term > rf.currentTerm {
+		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", reply.Term, rf.currentTerm)
+
+		// Fallback to Follower state
+		DiscoverHigherTerm(rf, reply.Term)
+		rf.mu.Unlock()
+		return false
+	}
+
+	if reply.VoteGranted {
+		// Check consistency
+		if reply.Term == rf.currentTerm && rf.state == Candidate {
+			// Count vote.
+			debug.Debug(debug.DVote, rf.me, "Valid vote from %v.", server)
+			rf.mu.Unlock()
+
+			// Send vote to voteCounter
+			ch <- server
+			debug.Debug(debug.DVote, rf.me, "Sent Vote from %v to voteCounter.", server)
+
+			return true
+		} else {
+			debug.Debug(debug.DVote, rf.me, "Vote from %v consistency check failed. vote:%+v, curTerm:%v, state:%v",
+				server, reply, rf.currentTerm, rf.state)
+			rf.mu.Unlock()
+			return false
+		}
+	}
+
+	debug.Debug(debug.DVote, rf.me, "Vote not granted from %v.", server)
+	rf.mu.Unlock()
+	return false
+}
+
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderId     int
+	PervLogIndex int
+	PervLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+/*
+Requires Lock.
+*/
+func updateCommitIndex(rf *Raft, leaderCommit int) {
+	if leaderCommit > rf.commitIndex {
+		var lastLogIndex int
+		lastEntry := rf.log.GetLast()
+		if lastEntry != nil {
+			lastLogIndex = lastEntry.Index
+		} else {
+			lastLogIndex = 0
+		}
+
+		newCommitIndex := min(leaderCommit, lastLogIndex)
+		debug.Debug(debug.DCommit, rf.me, "Updating commitIndex from %v to %v.", rf.commitIndex, newCommitIndex)
+		rf.commitIndex = newCommitIndex
+	}
+
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	debug.Debug(debug.DInfo, rf.me, "AppendEntries from %v. args:%+v", args.LeaderId, args)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term < rf.currentTerm {
+		debug.Debug(debug.DInfo, rf.me, "Old Term, AppendEntries rejected.")
+		reply.Success = false
+		return
+	} else if args.Term > rf.currentTerm {
+		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", args.Term, rf.currentTerm)
+		DiscoverHigherTerm(rf, args.Term)
+	} else if rf.state != Follower {
+		debug.Debug(debug.DVote, rf.me, "Discovered a leader at %v state.", rf.state)
+		DiscoverHigherTerm(rf, args.Term)
+	}
+
+	// So far, we are sure that the leader is valid, so consider this RPC as a Heartbeat.
+	//debug.Debug(debug.DTimer, rf.me, "Resetting election timer.")
+	ResetElectionTimer(rf)
+	reply.Term = rf.currentTerm
+
+	entry, ok := rf.log.Get(args.PervLogIndex)
+
+	// If you don't have an entry at PervLogIndex, return false
+	if !ok {
+		debug.Debug(debug.DRep, rf.me, "Does not have entry at index:%v.", args.PervLogIndex)
+		reply.Success = false
+		updateCommitIndex(rf, args.LeaderCommit)
+		return
+	}
+
+	// Consistency check for Previous Log Entry
+	if entry.Term != args.PervLogTerm {
+		debug.Debug(debug.DRep, rf.me, "Term of entry at index:%v is consistent. (self:%v, other:%v)",
+			args.PervLogIndex, entry.Term, args.PervLogTerm)
+		rf.log.DeleteFrom(entry.Index, rf.me)
+		reply.Success = false
+		updateCommitIndex(rf, args.LeaderCommit)
+		return
+	} else {
+		debug.Debug(debug.DRep, rf.me, "Log is consistent with leader. Sending success.")
+		reply.Success = true
+	}
+
+	// Appending new entries
+	for _, e := range args.Entries {
+		curEntry, ok := rf.log.Get(e.Index)
+		if !ok {
+			// We don't have the entry, append it.
+			rf.log.Add(e.Command, e.Term, rf.me)
+		} else {
+			// Consistency check
+			if curEntry.Term != e.Term {
+				rf.log.DeleteFrom(e.Index, rf.me)
+				rf.log.Add(e.Command, e.Term, rf.me)
+			}
+		}
+	}
+
+	updateCommitIndex(rf, args.LeaderCommit)
+}
+
+// This method should have an upper level handler to implement replication logic (2B) TODO.
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	debug.Debug(debug.DLeader, rf.me, "Sending AppendEntries to %v.", server)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	debug.Debug(debug.DLeader, rf.me, "Received AppendEntries response from %v.", server)
+
+	// Caller procedure
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// Check if there are greater Terms
+	if reply.Term > rf.currentTerm {
+		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", reply.Term, rf.currentTerm)
+
+		// Fallback to Follower state
+		DiscoverHigherTerm(rf, reply.Term)
+
+		return false
+	}
+
+	debug.Debug(debug.DLeader, rf.me, "Updating %v last contact.", server)
+	rf.lastInstanceContact[server] = time.Now()
+
 	return ok
 }
 
@@ -268,6 +493,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	rf.controlCh <- Follower
 }
 
 func (rf *Raft) killed() bool {
@@ -275,16 +501,239 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+/*
+Timer for leader election. It is safe to use it even in Leader state (In this case,
+it won't ever cause timeout)
+*/
 func (rf *Raft) ticker() {
+	flag := false
+	var electionTimeout int64
+
 	for !rf.killed() {
+		if !flag {
+			electionTimeout = 500 + (rand.Int63() % 300)
+			flag = true
+		}
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
+		rf.mu.Lock()
+		if rf.state != Leader {
+			if time.Duration(time.Since(rf.lastLeaderPing)).Milliseconds() > electionTimeout {
+				debug.Debug(debug.DTimer, rf.me, "Election timeout.")
+				debug.Debug(debug.DInfo, rf.me, "State change: %v --> Candidate.", rf.state)
+				rf.state = Candidate
+				flag = false
+				//ResetElectionTimer(rf)
 
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+				// Notify main goroutine
+				// debug.Debug(debug.DInfo, rf.me, "Sending notification to main.")
+				rf.controlCh <- Candidate
+			}
+		} else {
+			leaderTimeoutCheck(rf, electionTimeout)
+		}
+
+		rf.mu.Unlock()
+
+		// TODO: Currently, out time step to check the election timer is 10 ms.
+		time.Sleep(time.Duration(10) * time.Millisecond)
+	}
+}
+
+// Requires the lock
+func leaderTimeoutCheck(rf *Raft, timeout int64) {
+	counter := 1
+	for i, contact := range rf.lastInstanceContact {
+		if i == rf.me {
+			continue
+		}
+		contactDuration := time.Since(contact).Milliseconds()
+		if contactDuration < timeout {
+			//minValue = contactDuration
+			counter += 1
+		}
+	}
+
+	if counter <= len(rf.peers)/2 {
+		// Leader state is not valid
+		debug.Debug(debug.DLeader, rf.me, "Leader cannot reach majority (partition:%v)", counter)
+		debug.Debug(debug.DLeader, rf.me, "State change: %v --> Follower.", rf.state)
+		rf.state = Follower
+		rf.controlCh <- Follower
+	}
+}
+
+/*
+This function starts several goroutines responsible for election, so it does not block and returns promptly.
+*/
+func startElection(rf *Raft) {
+	ch := make(chan int)
+	result := make(map[int]int)
+
+	rf.mu.Lock()
+	// Starting election
+	rf.currentTerm += 1
+	result[rf.me] = 0
+	rf.votedFor = rf.me
+	ResetElectionTimer(rf)
+
+	var lastLogIndex int
+	var lastLogTerm int
+	lastEntry := rf.log.GetLast()
+	if lastEntry != nil {
+		lastLogIndex = lastEntry.Index
+		lastLogTerm = lastEntry.Term
+	} else {
+		lastLogIndex = 0
+		lastLogTerm = 0
+	}
+
+	args := RequestVoteArgs{
+		Term:         rf.currentTerm,
+		CandidateId:  rf.me,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			reply := RequestVoteReply{}
+			go rf.sendRequestVote(i, &args, &reply, ch)
+		}
+	}
+	go voteCounter(rf, result, ch, rf.currentTerm)
+	rf.mu.Unlock()
+}
+
+func voteCounter(rf *Raft, result map[int]int, ch chan int, term int) {
+	for {
+		// check if election is still going on.
+		rf.mu.Lock()
+		if rf.killed() || rf.state != Candidate || rf.currentTerm != term {
+			debug.Debug(debug.DVote, rf.me, "No election. Exiting from voteCounter.")
+			rf.mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+
+		timeout := time.After(1 * time.Second)
+
+		select {
+		case <-timeout:
+			debug.Debug(debug.DInfo, rf.me, "timeout of voteCounter.")
+		case vote := <-ch:
+			debug.Debug(debug.DVote, rf.me, "Received a vote from %v at voteCounter.", vote)
+			rf.mu.Lock()
+
+			// Checking consistency of vote
+			if rf.currentTerm == term && rf.state == Candidate && !rf.killed() {
+				if _, ok := result[vote]; !ok {
+					debug.Debug(debug.DVote, rf.me, "Counting vote from %v.", vote)
+					result[vote] = 0
+				} else {
+					debug.Debug(debug.DVote, rf.me, "Duplicate vote from %v.", vote)
+				}
+				if len(result) > len(result)/2 {
+					// Won the election
+					debug.Debug(debug.DLeader, rf.me, "State change: %v --> Leader.", rf.state)
+
+					rf.state = Leader
+
+					// Notifying state transition
+					rf.controlCh <- Leader
+					rf.mu.Unlock()
+					return
+				}
+			} else {
+				debug.Debug(debug.DVote, rf.me, "Inconsistent vote. isKilled:%v, curTerm:%v (election term:%v), state:%v",
+					rf.killed(), rf.currentTerm, term, rf.state)
+			}
+			rf.mu.Unlock()
+		}
+	}
+}
+
+/*
+Kicks off watchdogs required for sending AppendEntry RPCs to Followers. It doesn't block.
+*/
+func startLeader(rf *Raft) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	debug.Debug(debug.DLeader, rf.me, "Starting watchdogs ...")
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			go instanceWatchDog(i, rf, rf.currentTerm)
+		}
+	}
+}
+
+func sendHeartbeat(rf *Raft, server int) bool {
+	rf.mu.Lock()
+	var lastLogIndex int
+	var lastLogTerm int
+	lastEntry := rf.log.GetLast()
+	if lastEntry != nil {
+		lastLogIndex = lastEntry.Index
+		lastLogTerm = lastEntry.Term
+	} else {
+		lastLogIndex = 0
+		lastLogTerm = 0
+	}
+	args := AppendEntriesArgs{
+		Term:         rf.currentTerm,
+		LeaderId:     rf.me,
+		PervLogIndex: lastLogIndex,
+		PervLogTerm:  lastLogTerm,
+		Entries:      []LogEntry{},
+		LeaderCommit: rf.commitIndex,
+	}
+	reply := AppendEntriesReply{}
+	rf.mu.Unlock()
+
+	return rf.sendAppendEntries(server, &args, &reply)
+}
+
+func instanceWatchDog(server int, rf *Raft, term int) {
+	// Send initial heartbeats
+	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
+	sendHeartbeat(rf, server)
+
+	// Implement: 1. Periodic heartbeats. 2. RPCs to AppendEntry RPC (2B).
+	for {
+		<-time.After(100 * time.Millisecond)
+
+		rf.mu.Lock()
+		// Consistency check
+		if rf.killed() || rf.state != Leader || rf.currentTerm != term {
+			debug.Debug(debug.DLeader, rf.me, "Inconsistent state. isKilled:%v, state:%v, curTerm:%v, leaderTerm: %v",
+				rf.killed(), rf.state, rf.currentTerm, term)
+			rf.mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+		sendHeartbeat(rf, server)
+	}
+}
+
+func (rf *Raft) main() {
+	debug.Debug(debug.DInfo, rf.me, "Starting main.")
+	for !rf.killed() {
+
+		// Wait for state transition
+		// debug.Debug(debug.DInfo, rf.me, "Waiting for main notification.")
+		state := <-rf.controlCh
+		//debug.Debug(debug.DInfo, rf.me, "Received a notification from controlCh.")
+
+		// Do not block inside this switch statement
+		switch state {
+		case Candidate:
+			debug.Debug(debug.DVote, rf.me, "Starting an election...")
+			go startElection(rf)
+		case Leader:
+			debug.Debug(debug.DLeader, rf.me, "Starting leader routine.")
+			go startLeader(rf)
+		}
 	}
 }
 
@@ -307,11 +756,33 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	debug.Init()
 
+	// persistent states
+	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.log = Log{}
+	rf.log.Entries = []*LogEntry{}
+
+	// volatile states
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
+
+	// custom states
+	rf.state = Follower
+	rf.lastLeaderPing = time.Now()
+	rf.lastInstanceContact = make(map[int]time.Time)
+	rf.controlCh = make(chan State)
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
+	// starting main routine
+	go rf.main()
+
+	debug.Debug(debug.DInfo, rf.me, "Starting Raft...")
 	return rf
 }

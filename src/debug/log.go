@@ -20,7 +20,7 @@ const (
 	DInfo    logTopic = "INFO"
 	DLeader  logTopic = "LEAD"
 	DLog     logTopic = "LOG1"
-	DLog2    logTopic = "LOG2"
+	DRep     logTopic = "REPL"
 	DPersist logTopic = "PERS"
 	DSnap    logTopic = "SNAP"
 	DTerm    logTopic = "TERM"
@@ -61,9 +61,9 @@ func Init() {
 
 func Debug(topic logTopic, me int, format string, a ...interface{}) {
 	if debugVerbosity >= 1 {
-		time := time.Since(debugStart).Microseconds()
-		time /= 100
-		prefix := fmt.Sprintf("%06d | %v | %v", time, string(topic), me)
+		time := time.Since(debugStart).Milliseconds()
+		time /= 10
+		prefix := fmt.Sprintf("%06d | %v | %v | ", time, string(topic), me)
 		format = prefix + format + "\n"
 		log.Printf(format, a...)
 	}
