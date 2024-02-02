@@ -49,10 +49,15 @@ func CheckLogIsUpToDate(rf *Raft, otherTerm, otherIndex int) bool {
 Perform the operations required when discovering a higher term. (Needs lock)
 */
 func DiscoverHigherTerm(rf *Raft, term int) {
-	debug.Debug(debug.DInfo, rf.me, "State change: %v --> %v.", rf.state, Follower)
-	debug.Debug(debug.DTerm, rf.me, "Updating term: %v --> %v", rf.currentTerm, term)
-	rf.currentTerm = term
-	rf.state = Follower
+	if term != rf.currentTerm {
+		debug.Debug(debug.DTerm, rf.me, "Updating term: %v --> %v", rf.currentTerm, term)
+		rf.currentTerm = term
+	}
+	if rf.state != Follower {
+		debug.Debug(debug.DInfo, rf.me, "State change: %v --> %v.", rf.state, Follower)
+		rf.state = Follower
+	}
+
 	rf.votedFor = -1
 	// Notify main routine
 	rf.controlCh <- Follower
