@@ -111,7 +111,8 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	state State
+	state   State
+	applyCh chan ApplyMsg
 
 	currentTerm int
 	votedFor    int // peer's index (-1 means no vote)
@@ -123,6 +124,7 @@ type Raft struct {
 
 	lastLeaderPing      time.Time         // used for election timeout
 	lastInstanceContact map[int]time.Time // used for sending AppendEntry RPC
+	watchdogChannels    map[int]chan int
 
 	// Control channel for notifying the main goroutine. Only the main goroutine should read from this.
 	controlCh chan State
@@ -364,8 +366,32 @@ func updateCommitIndex(rf *Raft, leaderCommit int) {
 		}
 
 		newCommitIndex := min(leaderCommit, lastLogIndex)
-		debug.Debug(debug.DCommit, rf.me, "Updating commitIndex from %v to %v.", rf.commitIndex, newCommitIndex)
+		debug.Debug(debug.DCommit, rf.me, "Updating commitIndex: %v --> %v.", rf.commitIndex, newCommitIndex)
 		rf.commitIndex = newCommitIndex
+	}
+
+}
+
+// Requires Lock.
+func updateLastApplied(rf *Raft) {
+	if rf.commitIndex > rf.lastApplied {
+		debug.Debug(debug.DCommit, rf.me, "Updating lastApplied: %v --> %v.",
+			rf.lastApplied, rf.commitIndex)
+
+		for i := 0; i < rf.commitIndex-rf.lastApplied; i++ {
+			rf.lastApplied += 1
+			debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
+			entry, ok := rf.log.Get(rf.lastApplied)
+			if !ok {
+				debug.Debug(debug.DError, rf.me, "No entry at index:%v.", rf.lastApplied)
+			}
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: entry.Index,
+			}
+			debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", rf.lastApplied)
+		}
 	}
 
 }
@@ -395,7 +421,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	//debug.Debug(debug.DTimer, rf.me, "Resetting election timer.")
 	ResetElectionTimer(rf)
 
-	entry, ok := rf.log.Get(args.PervLogIndex)
+	var entry *LogEntry
+	var ok bool
+	if args.PervLogIndex == 0 && args.PervLogTerm == 0 {
+		entry = &LogEntry{
+			Term:  0,
+			Index: 0,
+		}
+		ok = true
+	} else {
+		entry, ok = rf.log.Get(args.PervLogIndex)
+	}
 
 	// If you don't have an entry at PervLogIndex, return false
 	if !ok {
@@ -434,6 +470,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	updateCommitIndex(rf, args.LeaderCommit)
+	updateLastApplied(rf)
 }
 
 // This method should have an upper level handler to implement replication logic (2B) TODO.
@@ -447,7 +484,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	// Caller procedure
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	// Check if there are greater Terms
 	if reply.Term > rf.currentTerm {
@@ -455,14 +491,95 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 		// Fallback to Follower state
 		DiscoverHigherTerm(rf, reply.Term)
-
+		rf.mu.Unlock()
 		return false
 	}
 
+	if rf.killed() || rf.state != Leader {
+		debug.Debug(debug.DLeader, rf.me, "Consistency check failed. isKilled:%v, state:%v",
+			rf.killed(), rf.state)
+		rf.mu.Unlock()
+		return false
+	}
+
+	// Updating last contact.
 	debug.Debug(debug.DLeader, rf.me, "Updating %v last contact.", server)
 	rf.lastInstanceContact[server] = time.Now()
 
+	// Update nextIndex and matchIndex
+	if reply.Success {
+		var newNextIndex int
+		if len(args.Entries) < 1 {
+			newNextIndex = args.PervLogIndex
+		} else {
+			newNextIndex = args.Entries[len(args.Entries)-1].Index
+		}
+		if newNextIndex > rf.matchIndex[server] {
+			debug.Debug(debug.DLog, rf.me, "Update matchIndex for %v: %v --> %v.",
+				server, rf.matchIndex[server], newNextIndex)
+			rf.matchIndex[server] = newNextIndex
+		}
+
+		if len(args.Entries) >= 1 {
+			lastEntry := args.Entries[len(args.Entries)-1]
+			debug.Debug(debug.DLog, rf.me, "Update nextIndex for %v: %v --> %v.",
+				server, rf.nextIndex[server], lastEntry.Index+1)
+			rf.nextIndex[server] = lastEntry.Index + 1
+		}
+
+	} else {
+		if rf.nextIndex[server] > 1 {
+			debug.Debug(debug.DLog, rf.me, "Decrement nextIndex for %v: %v --> %v.",
+				server, rf.nextIndex[server], rf.nextIndex[server]-1)
+			rf.nextIndex[server] -= 1
+		}
+	}
+
+	// Update commitIndex
+	updateLeaderCommitIndex(rf)
+
+	// Apply new commits
+	updateLastApplied(rf)
+
+	// Notify the watchdog
+	rf.mu.Unlock()
+	debug.Debug(debug.DLeader, rf.me, "Sending notification to %v's watchdog.", server)
+	var flag int
+	if len(args.Entries) == 0 {
+		flag = 1
+	} else {
+		flag = 0
+	}
+	rf.watchdogChannels[server] <- flag
+	//debug.Debug(debug.DLeader, rf.me, "Notified %v's watchdog.", server)
+
 	return ok
+}
+
+func updateLeaderCommitIndex(rf *Raft) {
+	candidateIndex := rf.commitIndex + 1
+
+	for {
+		entry, ok := rf.log.Get(candidateIndex)
+		if !ok {
+			break
+		}
+		if entry.Term != rf.currentTerm {
+			break
+		}
+		count := 1
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me && rf.matchIndex[i] >= candidateIndex {
+				count += 1
+			}
+		}
+		if count > len(rf.peers)/2 {
+			debug.Debug(debug.DCommit, rf.me, "Update commitIndex: %v --> %v.",
+				rf.commitIndex, candidateIndex)
+			rf.commitIndex = candidateIndex
+		}
+		candidateIndex += 1
+	}
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -478,13 +595,32 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
 
-	// Your code here (2B).
+	debug.Debug(debug.DInfo, rf.me, "Received an new command:%v.", command)
 
-	return index, term, isLeader
+	if rf.state != Leader {
+		debug.Debug(debug.DInfo, rf.me, "Cannot accept a command at %v state", rf.state)
+		rf.mu.Unlock()
+		return -1, rf.currentTerm, false
+	}
+
+	// Adding command to the log.
+	rf.log.Add(command, rf.currentTerm, rf.me)
+	debug.Debug(debug.DLeader, rf.me, "Added the new command to log.")
+
+	lastEntry := rf.log.GetLast()
+	rf.mu.Unlock()
+
+	// Notifying watchdogs
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			rf.watchdogChannels[i] <- 0
+		}
+	}
+	debug.Debug(debug.DLeader, rf.me, "Notified all watchdogs.")
+
+	return lastEntry.Index, lastEntry.Term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -556,14 +692,13 @@ func leaderTimeoutCheck(rf *Raft, timeout int64) {
 		}
 		contactDuration := time.Since(contact).Milliseconds()
 		if contactDuration < timeout {
-			//minValue = contactDuration
 			counter += 1
 		}
 	}
 
 	if counter <= len(rf.peers)/2 {
 		// Leader state is not valid
-		debug.Debug(debug.DLeader, rf.me, "Leader cannot reach majority (partition:%v)", counter)
+		debug.Debug(debug.DLeader, rf.me, "Leader cannot reach majority (partition size:%v)", counter)
 		debug.Debug(debug.DLeader, rf.me, "State change: %v --> Follower.", rf.state)
 		rf.state = Follower
 		rf.controlCh <- Follower
@@ -665,33 +800,68 @@ Kicks off watchdogs required for sending AppendEntry RPCs to Followers. It doesn
 */
 func startLeader(rf *Raft) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+
+	// Initializing volatile state of the leader
+	var lastLogIndex int
+	lastEntry := rf.log.GetLast()
+	if lastEntry != nil {
+		lastLogIndex = lastEntry.Index
+	} else {
+		lastLogIndex = 0
+	}
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			rf.nextIndex[i] = lastLogIndex + 1
+			rf.matchIndex[i] = 0
+		}
+	}
+	curTerm := rf.currentTerm
+	rf.mu.Unlock()
+
 	debug.Debug(debug.DLeader, rf.me, "Starting watchdogs ...")
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-			go instanceWatchDog(i, rf, rf.currentTerm)
+			ch := make(chan int)
+			rf.watchdogChannels[i] = ch
+			go instanceWatchDog(i, rf, curTerm, ch)
 		}
 	}
 }
 
-func sendHeartbeat(rf *Raft, server int) bool {
+func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
 	rf.mu.Lock()
-	var lastLogIndex int
-	var lastLogTerm int
-	lastEntry := rf.log.GetLast()
-	if lastEntry != nil {
-		lastLogIndex = lastEntry.Index
-		lastLogTerm = lastEntry.Term
+
+	var pervLogIndex int
+	var pervLogTerm int
+	pervEntry, ok := rf.log.Get(index - 1)
+	if ok {
+		pervLogIndex = pervEntry.Index
+		pervLogTerm = pervEntry.Term
 	} else {
-		lastLogIndex = 0
-		lastLogTerm = 0
+		pervLogIndex = 0
+		pervLogTerm = 0
 	}
+
+	entries := []LogEntry{}
+
+	nextIndex := index
+	for {
+		entry, ok := rf.log.Get(nextIndex)
+		if ok {
+			entries = append(entries, *entry)
+			nextIndex += 1
+		} else {
+			break
+		}
+	}
+
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
-		PervLogIndex: lastLogIndex,
-		PervLogTerm:  lastLogTerm,
-		Entries:      []LogEntry{},
+		PervLogIndex: pervLogIndex,
+		PervLogTerm:  pervLogTerm,
+		Entries:      entries,
 		LeaderCommit: rf.commitIndex,
 	}
 	reply := AppendEntriesReply{}
@@ -700,15 +870,13 @@ func sendHeartbeat(rf *Raft, server int) bool {
 	return rf.sendAppendEntries(server, &args, &reply)
 }
 
-func instanceWatchDog(server int, rf *Raft, term int) {
+func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 	// Send initial heartbeats
 	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
-	sendHeartbeat(rf, server)
+	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 
-	// Implement: 1. Periodic heartbeats. 2. RPCs to AppendEntry RPC (2B).
+	timer := time.NewTimer(100 * time.Millisecond)
 	for {
-		<-time.After(100 * time.Millisecond)
-
 		rf.mu.Lock()
 		// Consistency check
 		if rf.killed() || rf.state != Leader || rf.currentTerm != term {
@@ -718,7 +886,26 @@ func instanceWatchDog(server int, rf *Raft, term int) {
 			return
 		}
 		rf.mu.Unlock()
-		sendHeartbeat(rf, server)
+
+		select {
+		case <-timer.C:
+			debug.Debug(debug.DLeader, rf.me, "Watchdog for %v timeout.", server)
+			timer.Reset(100 * time.Millisecond)
+			go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
+		case flag := <-ch:
+			timer.Reset(100 * time.Millisecond)
+			if flag != 1 {
+				// previous AppendEntry RPC was not a heartbeat.
+				debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to send a AppendEntries",
+					server)
+				go appendEntriesWrapper(rf, server, rf.nextIndex[server], false)
+			} else {
+				// previous AppendEntry RPC was a heartbeat.
+				debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to *not* send a AppendEntries",
+					server)
+			}
+
+		}
 	}
 }
 
@@ -778,7 +965,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.lastLeaderPing = time.Now()
 	rf.lastInstanceContact = make(map[int]time.Time)
+	rf.watchdogChannels = make(map[int]chan int)
 	rf.controlCh = make(chan State)
+	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
