@@ -220,6 +220,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer func() {
+		reply.Term = rf.currentTerm
+	}()
 
 	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
@@ -230,8 +233,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", args.Term, rf.currentTerm)
 		DiscoverHigherTerm(rf, args.Term)
 	}
-
-	reply.Term = rf.currentTerm
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		if CheckLogIsUpToDate(rf, args.LastLogTerm, args.LastLogIndex) {
@@ -374,6 +375,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer func() {
+		reply.Term = rf.currentTerm
+	}()
 
 	if args.Term < rf.currentTerm {
 		debug.Debug(debug.DInfo, rf.me, "Old Term, AppendEntries rejected.")
@@ -390,7 +394,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// So far, we are sure that the leader is valid, so consider this RPC as a Heartbeat.
 	//debug.Debug(debug.DTimer, rf.me, "Resetting election timer.")
 	ResetElectionTimer(rf)
-	reply.Term = rf.currentTerm
 
 	entry, ok := rf.log.Get(args.PervLogIndex)
 
