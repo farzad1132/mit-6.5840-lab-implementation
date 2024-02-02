@@ -440,6 +440,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	debug.Debug(debug.DLeader, rf.me, "Sending AppendEntries to %v.", server)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if !ok {
+		return false
+	}
 	debug.Debug(debug.DLeader, rf.me, "Received AppendEntries response from %v.", server)
 
 	// Caller procedure
