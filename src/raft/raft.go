@@ -899,7 +899,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 		rf.mu.Lock()
 		// Consistency check
 		if rf.killed() || rf.state != Leader || rf.currentTerm != term {
-			debug.Debug(debug.DLeader, rf.me, "Inconsistent state. isKilled:%v, state:%v, curTerm:%v, leaderTerm: %v",
+			debug.Debug(debug.DLeader, rf.me, "Watchdog state is inconsistent. isKilled:%v, state:%v, curTerm:%v, leaderTerm: %v",
 				rf.killed(), rf.state, rf.currentTerm, term)
 			rf.mu.Unlock()
 			return
