@@ -845,6 +845,9 @@ func startLeader(rf *Raft) {
 			go instanceWatchDog(i, rf, curTerm, ch)
 		}
 	}
+
+	// Committing a no-op command upon winning the election.
+	go rf.Start("no-op")
 }
 
 func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
@@ -889,9 +892,7 @@ func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
 }
 
 func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
-	// Send initial heartbeats
 	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
-	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 
 	timer := time.NewTimer(100 * time.Millisecond)
 	for {
