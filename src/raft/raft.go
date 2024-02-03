@@ -556,14 +556,31 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	return ok
 }
 
+/*
+Note: Updating by counting index should only be applied to entries with current term.
+*/
 func updateLeaderCommitIndex(rf *Raft) {
-	candidateIndex := rf.commitIndex + 1
+	lastEntry := rf.log.GetLast()
+	var candidateIndex int
+
+	// Return if the log is empty
+	if lastEntry != nil {
+		candidateIndex = lastEntry.Index
+	} else {
+		return
+	}
+
+	// Check for the for updating.
+	if candidateIndex <= rf.commitIndex {
+		return
+	}
 
 	for {
 		entry, ok := rf.log.Get(candidateIndex)
 		if !ok {
 			break
 		}
+		// Only count replicas if the term == currentTerm
 		if entry.Term != rf.currentTerm {
 			break
 		}
@@ -577,8 +594,9 @@ func updateLeaderCommitIndex(rf *Raft) {
 			debug.Debug(debug.DCommit, rf.me, "Update commitIndex: %v --> %v.",
 				rf.commitIndex, candidateIndex)
 			rf.commitIndex = candidateIndex
+			return
 		}
-		candidateIndex += 1
+		candidateIndex -= 1
 	}
 }
 
