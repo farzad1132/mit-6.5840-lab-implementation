@@ -796,7 +796,7 @@ func voteCounter(rf *Raft, result map[int]int, ch chan int, term int) {
 				} else {
 					debug.Debug(debug.DVote, rf.me, "Duplicate vote from %v.", vote)
 				}
-				if len(result) > len(result)/2 {
+				if len(result) > len(rf.peers)/2 {
 					// Won the election
 					debug.Debug(debug.DLeader, rf.me, "State change: %v --> Leader.", rf.state)
 
