@@ -849,8 +849,9 @@ func startLeader(rf *Raft) {
 		}
 	}
 
-	// Committing a no-op command upon winning the election.
-	go rf.Start("no-op")
+	// TODO: Replace this no-op command with initial heartbeat.
+	/* // Committing a no-op command upon winning the election.
+	go rf.Start("no-op") */
 }
 
 func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
@@ -896,6 +897,8 @@ func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
 
 func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
+	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
+	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 
 	timer := time.NewTimer(100 * time.Millisecond)
 	for {
