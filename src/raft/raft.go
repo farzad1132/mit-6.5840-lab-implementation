@@ -523,9 +523,12 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 		if len(args.Entries) >= 1 {
 			lastEntry := args.Entries[len(args.Entries)-1]
-			debug.Debug(debug.DLog, rf.me, "Update nextIndex for %v: %v --> %v.",
-				server, rf.nextIndex[server], lastEntry.Index+1)
-			rf.nextIndex[server] = lastEntry.Index + 1
+			if lastEntry.Index+1 > rf.nextIndex[server] {
+				debug.Debug(debug.DLog, rf.me, "Update nextIndex for %v: %v --> %v.",
+					server, rf.nextIndex[server], lastEntry.Index+1)
+				rf.nextIndex[server] = lastEntry.Index + 1
+			}
+
 		}
 
 	} else {
@@ -571,11 +574,6 @@ func updateLeaderCommitIndex(rf *Raft) {
 		return
 	}
 
-	// Check for the for updating.
-	if candidateIndex <= rf.commitIndex {
-		return
-	}
-
 	for {
 		entry, ok := rf.log.Get(candidateIndex)
 		if !ok {
@@ -584,6 +582,10 @@ func updateLeaderCommitIndex(rf *Raft) {
 		// Only count replicas if the term == currentTerm
 		if entry.Term != rf.currentTerm {
 			break
+		}
+		// Check for the for updating.
+		if candidateIndex <= rf.commitIndex {
+			return
 		}
 		count := 1
 		for i := 0; i < len(rf.peers); i++ {
