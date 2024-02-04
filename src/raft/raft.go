@@ -378,7 +378,8 @@ func updateLastApplied(rf *Raft) {
 		debug.Debug(debug.DCommit, rf.me, "Updating lastApplied: %v --> %v.",
 			rf.lastApplied, rf.commitIndex)
 
-		for i := 0; i < rf.commitIndex-rf.lastApplied; i++ {
+		updateCount := rf.commitIndex - rf.lastApplied
+		for i := 0; i < updateCount; i++ {
 			rf.lastApplied += 1
 			debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
 			entry, ok := rf.log.Get(rf.lastApplied)
