@@ -100,6 +100,33 @@ func (l *Log) DeleteFrom(index, me int) {
 	//debug.Debug(debug.DInfo, me, "Tmp: Entries: %+v.", l.Entries)
 }
 
+func (l *Log) FirstIndexOfTerm(term int) int {
+	for _, e := range l.Entries {
+		if e.Term == term {
+			return e.Index
+		}
+	}
+	return -1
+}
+
+func (l *Log) LastIndexOfTerm(term int) int {
+	for i := len(l.Entries) - 1; i >= 0; i-- {
+		if l.Entries[i].Term == term {
+			return l.Entries[i].Index
+		}
+	}
+	return -1
+}
+
+func (l *Log) HasTerm(term int) bool {
+	for _, e := range l.Entries {
+		if e.Term == term {
+			return true
+		}
+	}
+	return false
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -349,6 +376,9 @@ type AppendEntriesArgs struct {
 
 type AppendEntriesReply struct {
 	Term    int
+	XTerm   int
+	XIndex  int
+	XLen    int
 	Success bool
 }
 
@@ -438,6 +468,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if !ok {
 		debug.Debug(debug.DRep, rf.me, "Does not have entry at index:%v.", args.PervLogIndex)
 		reply.Success = false
+		reply.XIndex = -1
+		reply.XTerm = -1
+		reply.XLen = len(rf.log.Entries)
 		updateCommitIndex(rf, args.LeaderCommit)
 		return
 	}
@@ -448,6 +481,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			args.PervLogIndex, entry.Term, args.PervLogTerm)
 		rf.log.DeleteFrom(entry.Index, rf.me)
 		reply.Success = false
+		reply.XTerm = entry.Term
+		reply.XIndex = rf.log.FirstIndexOfTerm(entry.Term)
+		if reply.XIndex == -1 {
+			reply.XLen = len(rf.log.Entries)
+		}
 		updateCommitIndex(rf, args.LeaderCommit)
 		return
 	} else {
@@ -532,10 +570,22 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		}
 
 	} else {
-		if rf.nextIndex[server] > 1 {
+		oldNextIndex := rf.nextIndex[server]
+		if reply.XIndex == -1 && reply.XTerm == -1 {
+			rf.nextIndex[server] = reply.XLen
+		} else if !rf.log.HasTerm(reply.XTerm) {
+			rf.nextIndex[server] = reply.XIndex
+		} else {
+			if last := rf.log.LastIndexOfTerm(reply.XTerm); last != -1 {
+				rf.nextIndex[server] = last
+			} else {
+				rf.nextIndex[server] = reply.XLen
+			}
+
+		}
+		if oldNextIndex != rf.nextIndex[server] {
 			debug.Debug(debug.DLog, rf.me, "Decrement nextIndex for %v: %v --> %v.",
-				server, rf.nextIndex[server], rf.nextIndex[server]-1)
-			rf.nextIndex[server] -= 1
+				server, oldNextIndex, rf.nextIndex[server])
 		}
 	}
 
