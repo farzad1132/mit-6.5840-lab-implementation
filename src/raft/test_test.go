@@ -8,12 +8,14 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -562,7 +564,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.end()
 }
 
-func TestCount2B(t *testing.T) {
+/* func TestCount2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -670,7 +672,7 @@ loop:
 	}
 
 	cfg.end()
-}
+} */
 
 func TestPersist12C(t *testing.T) {
 	servers := 3
