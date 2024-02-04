@@ -899,8 +899,8 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
 	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
 	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
-
-	timer := time.NewTimer(100 * time.Millisecond)
+	timeout := time.Duration(100) * time.Millisecond
+	timer := time.NewTimer(timeout)
 	for {
 		rf.mu.Lock()
 		// Consistency check
@@ -915,10 +915,10 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 		select {
 		case <-timer.C:
 			debug.Debug(debug.DLeader, rf.me, "Watchdog for %v timeout.", server)
-			timer.Reset(100 * time.Millisecond)
+			timer.Reset(timeout)
 			go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 		case flag := <-ch:
-			timer.Reset(100 * time.Millisecond)
+			timer.Reset(timeout)
 			if flag != 1 {
 				// previous AppendEntry RPC was not a heartbeat.
 				debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to send a AppendEntries",
