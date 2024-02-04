@@ -95,9 +95,9 @@ func (l *Log) GetLast() *LogEntry {
 
 func (l *Log) DeleteFrom(index, me int) {
 	// TODO: Check if it works properly
-	debug.Debug(debug.DLog, me, "Deleting Entries from index:%v.", index)
+	//debug.Debug(debug.DInfo, me, "Tmp: Deleting Entries from index:%v.", index)
 	l.Entries = l.Entries[:index-1]
-	debug.Debug(debug.DTest, me, "Entries: %+v.", l.Entries)
+	//debug.Debug(debug.DInfo, me, "Tmp: Entries: %+v.", l.Entries)
 }
 
 // A Go object implementing a single Raft peer.
@@ -381,7 +381,7 @@ func updateLastApplied(rf *Raft) {
 		updateCount := rf.commitIndex - rf.lastApplied
 		for i := 0; i < updateCount; i++ {
 			rf.lastApplied += 1
-			debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
+			//debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
 			entry, ok := rf.log.Get(rf.lastApplied)
 			if !ok {
 				debug.Debug(debug.DError, rf.me, "No entry at index:%v.", rf.lastApplied)
@@ -391,7 +391,7 @@ func updateLastApplied(rf *Raft) {
 				Command:      entry.Command,
 				CommandIndex: entry.Index,
 			}
-			debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", rf.lastApplied)
+			//debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", rf.lastApplied)
 		}
 	}
 
@@ -547,7 +547,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	// Notify the watchdog
 	rf.mu.Unlock()
-	debug.Debug(debug.DLeader, rf.me, "Sending notification to %v's watchdog.", server)
+	//debug.Debug(debug.DLeader, rf.me, "Sending notification to %v's watchdog.", server)
 	var flag int
 	if len(args.Entries) == 0 {
 		flag = 1
@@ -921,13 +921,13 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 			timer.Reset(timeout)
 			if flag != 1 {
 				// previous AppendEntry RPC was not a heartbeat.
-				debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to send a AppendEntries",
-					server)
+				//debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to send a AppendEntries",
+				//	server)
 				go appendEntriesWrapper(rf, server, rf.nextIndex[server], false)
 			} else {
 				// previous AppendEntry RPC was a heartbeat.
-				debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to *not* send a AppendEntries",
-					server)
+				//debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to *not* send a AppendEntries",
+				//	server)
 			}
 
 		}
