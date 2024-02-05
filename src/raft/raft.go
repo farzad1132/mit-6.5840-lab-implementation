@@ -578,20 +578,25 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	} else {
 		oldNextIndex := rf.nextIndex[server]
 		if reply.XIndex == -1 && reply.XTerm == -1 {
-			rf.nextIndex[server] = reply.XLen
+			rf.nextIndex[server] = min(1, reply.XLen)
 		} else if !rf.log.HasTerm(reply.XTerm) {
 			rf.nextIndex[server] = reply.XIndex
 		} else {
 			if last := rf.log.LastIndexOfTerm(reply.XTerm); last != -1 {
 				rf.nextIndex[server] = last
 			} else {
-				rf.nextIndex[server] = reply.XLen
+				rf.nextIndex[server] = min(1, reply.XLen)
 			}
 
 		}
 		if oldNextIndex != rf.nextIndex[server] {
 			debug.Debug(debug.DLog, rf.me, "Decrement nextIndex for %v: %v --> %v.",
 				server, oldNextIndex, rf.nextIndex[server])
+		}
+		if rf.nextIndex[server] < 1 {
+			err := fmt.Sprintf("Invalid nextIndex:%v for server:%v.", rf.nextIndex[server], server)
+			debug.Debug(debug.DError, rf.me, err)
+			panic(err)
 		}
 	}
 
