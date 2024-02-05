@@ -515,6 +515,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // This method should have an upper level handler to implement replication logic (2B) TODO.
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	debug.Debug(debug.DLeader, rf.me, "Sending AppendEntries to %v.", server)
+	rf.mu.Lock()
+	if args.Term != rf.currentTerm || rf.state != Leader {
+		rf.mu.Unlock()
+		return false
+	}
+	rf.mu.Unlock()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if !ok {
 		return false
