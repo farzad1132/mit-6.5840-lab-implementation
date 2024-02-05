@@ -477,7 +477,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Consistency check for Previous Log Entry
 	if entry.Term != args.PervLogTerm {
-		debug.Debug(debug.DRep, rf.me, "Term of entry at index:%v is consistent. (self:%v, other:%v)",
+		debug.Debug(debug.DRep, rf.me, "Term of entry at index:%v is inconsistent. (self:%v, other:%v)",
 			args.PervLogIndex, entry.Term, args.PervLogTerm)
 		rf.log.DeleteFrom(entry.Index, rf.me)
 		reply.Success = false
