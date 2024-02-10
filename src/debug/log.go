@@ -13,22 +13,22 @@ type logTopic string
 const (
 	// levels
 
-	DClient  logTopic = "CLNT"
-	DCommit  logTopic = "CMIT"
-	DDrop    logTopic = "DROP"
-	DError   logTopic = "ERRO"
-	DInfo    logTopic = "INFO"
-	DLeader  logTopic = "LEAD"
-	DLog     logTopic = "LOG1"
-	DRep     logTopic = "REPL"
-	DPersist logTopic = "PERS"
-	DSnap    logTopic = "SNAP"
-	DTerm    logTopic = "TERM"
-	DTest    logTopic = "TEST"
-	DTimer   logTopic = "TIMR"
-	DTrace   logTopic = "TRCE"
-	DVote    logTopic = "VOTE"
-	DWarn    logTopic = "WARN"
+	DClient  logTopic = "CLNT"    // Used for any interaction with the **clients**
+	DCommit  logTopic = "CMIT"    // Used when **committing or applying a log index**
+	DDrop    logTopic = "DROP"    // Used for when **deleting log entries**
+	DError   logTopic = "ERRO"    // Used right before panicing
+	DInfo    logTopic = "INFO"    // Used for general non-error messages (Also for implementation related logging)
+	DLeader  logTopic = "LEAD"    // Used for general **leader** functionalities
+	DLog     logTopic = "LOG1"    // Used for nextIndex and matchIndex
+	DRep     logTopic = "REPL"    // Used for adding entries to log
+	DPersist logTopic = "PERS"    // Used for messages related to **persistence**
+	DSnap    logTopic = "SNAP"    // Used for messages related to **snapshots**
+	DTerm    logTopic = "TERM"    // Used for **term** related operations
+	DRPC     logTopic = "RPC"     // Used for RPC related messages
+	DTimer   logTopic = "TIMR"    // Used for **timer** related messages
+	DConsist logTopic = "CONSIST" // Used for consistency check messages
+	DVote    logTopic = "VOTE"    // Used for **voting** related messages
+	DState   logTopic = "STATE"   // Used for **state** related messages
 )
 
 // Retrieve the verbosity level from an environment variable

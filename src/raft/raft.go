@@ -75,7 +75,7 @@ func (l *Log) Add(command interface{}, term, me int) bool {
 		Index:   len(l.Entries) + 1,
 	}
 	l.Entries = append(l.Entries, &entry)
-	debug.Debug(debug.DLog, me, "Added command:%v with term:%v to index:%v", command, term, len(l.Entries))
+	debug.Debug(debug.DRep, me, "Added command:%v with term:%v to index:%v", command, term, len(l.Entries))
 	return true
 }
 
@@ -95,7 +95,7 @@ func (l *Log) GetLast() *LogEntry {
 
 func (l *Log) DeleteFrom(index, me int) {
 	// TODO: Check if it works properly
-	//debug.Debug(debug.DInfo, me, "Tmp: Deleting Entries from index:%v.", index)
+	debug.Debug(debug.DDrop, me, "Deleting Entries from index:%v.", index)
 	l.Entries = l.Entries[:index-1]
 	//debug.Debug(debug.DInfo, me, "Tmp: Entries: %+v.", l.Entries)
 }
@@ -245,7 +245,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	debug.Debug(debug.DInfo, rf.me, "RequestVote from %v", args.CandidateId)
+	debug.Debug(debug.DRPC, rf.me, "RequestVote from %v", args.CandidateId)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -255,7 +255,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if rf.currentTerm > args.Term {
 		reply.VoteGranted = false
-		debug.Debug(debug.DVote, rf.me, "Old Term (%v < %v), vote rejected.", args.Term, rf.currentTerm)
+		debug.Debug(debug.DTerm, rf.me, "Old Term (%v < %v), vote rejected.", args.Term, rf.currentTerm)
 		return
 	} else if rf.currentTerm < args.Term {
 		// Fallback to Follower
@@ -273,8 +273,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = false
 			// TODO: check this line (for the scenario that you have voted for a candidate but their log now
 			// is not up-to-date)
-			rf.votedFor = -1
-			debug.Debug(debug.DVote, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%+v)), vote rejected.",
+			//rf.votedFor = -1
+			debug.Debug(debug.DConsist, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%+v)), vote rejected.",
 				args.LastLogIndex, args.LastLogTerm, rf.log.GetLast())
 		}
 	} else {
@@ -324,7 +324,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 		rf.mu.Unlock()
 		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}
-	debug.Debug(debug.DInfo, rf.me, "Received RequestVote response from %v.", server)
+	debug.Debug(debug.DRPC, rf.me, "Received RequestVote response from %v.", server)
 
 	// Caller procedure
 	rf.mu.Lock()
@@ -349,11 +349,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 			// Send vote to voteCounter
 			ch <- server
-			debug.Debug(debug.DVote, rf.me, "Sent Vote from %v to voteCounter.", server)
+			debug.Debug(debug.DInfo, rf.me, "Sent Vote from %v to voteCounter.", server)
 
 			return true
 		} else {
-			debug.Debug(debug.DVote, rf.me, "Vote from %v consistency check failed. vote:%+v, curTerm:%v, state:%v",
+			debug.Debug(debug.DConsist, rf.me, "Vote from %v consistency check failed. vote:%+v, curTerm:%v, state:%v",
 				server, reply, rf.currentTerm, rf.state)
 			rf.mu.Unlock()
 			return false
@@ -414,7 +414,9 @@ func updateLastApplied(rf *Raft) {
 			//debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
 			entry, ok := rf.log.Get(rf.lastApplied)
 			if !ok {
-				debug.Debug(debug.DError, rf.me, "No entry at index:%v.", rf.lastApplied)
+				err := fmt.Sprintf("No entry at index:%v.", rf.lastApplied)
+				debug.Debug(debug.DError, rf.me, err)
+				panic(err)
 			}
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
@@ -428,7 +430,7 @@ func updateLastApplied(rf *Raft) {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	debug.Debug(debug.DInfo, rf.me, "AppendEntries from %v. args:%+v", args.LeaderId, args)
+	debug.Debug(debug.DRPC, rf.me, "AppendEntries from %v. args:%+v", args.LeaderId, args)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -437,7 +439,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}()
 
 	if args.Term < rf.currentTerm {
-		debug.Debug(debug.DInfo, rf.me, "Old Term, AppendEntries rejected.")
+		debug.Debug(debug.DTerm, rf.me, "Old Term, AppendEntries rejected.")
 		reply.Success = false
 		return
 	} else if args.Term > rf.currentTerm {
@@ -466,7 +468,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// If you don't have an entry at PervLogIndex, return false
 	if !ok {
-		debug.Debug(debug.DRep, rf.me, "Does not have entry at index:%v.", args.PervLogIndex)
+		debug.Debug(debug.DLog, rf.me, "Does not have entry at index:%v. (Log len:%v)",
+			args.PervLogIndex, len(rf.log.Entries))
 		reply.Success = false
 		reply.XIndex = -1
 		reply.XTerm = -1
@@ -477,7 +480,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Consistency check for Previous Log Entry
 	if entry.Term != args.PervLogTerm {
-		debug.Debug(debug.DRep, rf.me, "Term of entry at index:%v is inconsistent. (self:%v, other:%v)",
+		debug.Debug(debug.DConsist, rf.me, "Term of entry at index:%v is inconsistent. (self:%v, other:%v)",
 			args.PervLogIndex, entry.Term, args.PervLogTerm)
 		rf.log.DeleteFrom(entry.Index, rf.me)
 		reply.Success = false
@@ -489,7 +492,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		updateCommitIndex(rf, args.LeaderCommit)
 		return
 	} else {
-		debug.Debug(debug.DRep, rf.me, "Log is consistent with leader. Sending success.")
+		debug.Debug(debug.DLog, rf.me, "Log is consistent with leader. Sending success.")
 		reply.Success = true
 	}
 
@@ -514,7 +517,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 // This method should have an upper level handler to implement replication logic (2B) TODO.
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	debug.Debug(debug.DLeader, rf.me, "Sending AppendEntries to %v.", server)
+	debug.Debug(debug.DRPC, rf.me, "Sending AppendEntries to %v.", server)
 	rf.mu.Lock()
 	if args.Term != rf.currentTerm || rf.state != Leader {
 		rf.mu.Unlock()
@@ -525,7 +528,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	if !ok {
 		return false
 	}
-	debug.Debug(debug.DLeader, rf.me, "Received AppendEntries response from %v.", server)
+	debug.Debug(debug.DRPC, rf.me, "Received AppendEntries response from %v.", server)
 
 	// Caller procedure
 	rf.mu.Lock()
@@ -548,7 +551,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	}
 
 	// Updating last contact.
-	debug.Debug(debug.DLeader, rf.me, "Updating %v last contact.", server)
+	debug.Debug(debug.DInfo, rf.me, "Updating %v last contact.", server)
 	rf.lastInstanceContact[server] = time.Now()
 
 	// Update nextIndex and matchIndex
@@ -679,10 +682,10 @@ func updateLeaderCommitIndex(rf *Raft) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 
-	debug.Debug(debug.DInfo, rf.me, "Received an new command:%v.", command)
+	debug.Debug(debug.DClient, rf.me, "Received an new command:%v.", command)
 
 	if rf.state != Leader {
-		debug.Debug(debug.DInfo, rf.me, "Cannot accept a command at %v state", rf.state)
+		debug.Debug(debug.DClient, rf.me, "Cannot accept a command at %v state", rf.state)
 		rf.mu.Unlock()
 		return -1, rf.currentTerm, false
 	}
@@ -700,7 +703,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.watchdogChannels[i] <- 0
 		}
 	}
-	debug.Debug(debug.DLeader, rf.me, "Notified all watchdogs.")
+	debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
 
 	return lastEntry.Index, lastEntry.Term, true
 }
@@ -745,7 +748,7 @@ func (rf *Raft) ticker() {
 		if rf.state != Leader {
 			if time.Duration(time.Since(rf.lastLeaderPing)).Milliseconds() > electionTimeout {
 				debug.Debug(debug.DTimer, rf.me, "Election timeout.")
-				debug.Debug(debug.DInfo, rf.me, "State change: %v --> Candidate.", rf.state)
+				debug.Debug(debug.DState, rf.me, "State change: %v --> Candidate.", rf.state)
 				rf.state = Candidate
 				flag = false
 				//ResetElectionTimer(rf)
@@ -780,8 +783,8 @@ func leaderTimeoutCheck(rf *Raft, timeout int64) {
 
 	if counter <= len(rf.peers)/2 {
 		// Leader state is not valid
-		debug.Debug(debug.DLeader, rf.me, "Leader cannot reach majority (partition size:%v)", counter)
-		debug.Debug(debug.DLeader, rf.me, "State change: %v --> Follower.", rf.state)
+		debug.Debug(debug.DInfo, rf.me, "Leader cannot reach majority (partition size:%v)", counter)
+		debug.Debug(debug.DState, rf.me, "State change: %v --> Follower.", rf.state)
 		rf.state = Follower
 		rf.controlCh <- Follower
 	}
@@ -834,7 +837,7 @@ func voteCounter(rf *Raft, result map[int]int, ch chan int, term int) {
 		// check if election is still going on.
 		rf.mu.Lock()
 		if rf.killed() || rf.state != Candidate || rf.currentTerm != term {
-			debug.Debug(debug.DVote, rf.me, "No election. Exiting from voteCounter.")
+			debug.Debug(debug.DConsist, rf.me, "No election. Exiting from voteCounter.")
 			rf.mu.Unlock()
 			return
 		}
@@ -844,22 +847,22 @@ func voteCounter(rf *Raft, result map[int]int, ch chan int, term int) {
 
 		select {
 		case <-timeout:
-			debug.Debug(debug.DInfo, rf.me, "timeout of voteCounter.")
+			debug.Debug(debug.DConsist, rf.me, "timeout of voteCounter.")
 		case vote := <-ch:
-			debug.Debug(debug.DVote, rf.me, "Received a vote from %v at voteCounter.", vote)
+			debug.Debug(debug.DInfo, rf.me, "Received a vote from %v at voteCounter.", vote)
 			rf.mu.Lock()
 
 			// Checking consistency of vote
 			if rf.currentTerm == term && rf.state == Candidate && !rf.killed() {
 				if _, ok := result[vote]; !ok {
-					debug.Debug(debug.DVote, rf.me, "Counting vote from %v.", vote)
+					debug.Debug(debug.DInfo, rf.me, "Counting vote from %v.", vote)
 					result[vote] = 0
 				} else {
-					debug.Debug(debug.DVote, rf.me, "Duplicate vote from %v.", vote)
+					debug.Debug(debug.DInfo, rf.me, "Duplicate vote from %v.", vote)
 				}
 				if len(result) > len(rf.peers)/2 {
 					// Won the election
-					debug.Debug(debug.DLeader, rf.me, "State change: %v --> Leader.", rf.state)
+					debug.Debug(debug.DState, rf.me, "State change: %v --> Leader.", rf.state)
 
 					rf.state = Leader
 
@@ -869,7 +872,7 @@ func voteCounter(rf *Raft, result map[int]int, ch chan int, term int) {
 					return
 				}
 			} else {
-				debug.Debug(debug.DVote, rf.me, "Inconsistent vote. isKilled:%v, curTerm:%v (election term:%v), state:%v",
+				debug.Debug(debug.DConsist, rf.me, "Inconsistent vote. isKilled:%v, curTerm:%v (election term:%v), state:%v",
 					rf.killed(), rf.currentTerm, term, rf.state)
 			}
 			rf.mu.Unlock()
@@ -901,7 +904,7 @@ func startLeader(rf *Raft) {
 	curTerm := rf.currentTerm
 	rf.mu.Unlock()
 
-	debug.Debug(debug.DLeader, rf.me, "Starting watchdogs ...")
+	debug.Debug(debug.DInfo, rf.me, "Starting watchdogs ...")
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
 			ch := make(chan int)
@@ -957,7 +960,7 @@ func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
 }
 
 func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
-	debug.Debug(debug.DLeader, rf.me, "Starting watchdog for %v.", server)
+	debug.Debug(debug.DInfo, rf.me, "Starting watchdog for %v.", server)
 	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
 	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 	timeout := time.Duration(100) * time.Millisecond
@@ -966,7 +969,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 		rf.mu.Lock()
 		// Consistency check
 		if rf.killed() || rf.state != Leader || rf.currentTerm != term {
-			debug.Debug(debug.DLeader, rf.me, "Watchdog state is inconsistent. isKilled:%v, state:%v, curTerm:%v, leaderTerm: %v",
+			debug.Debug(debug.DConsist, rf.me, "Watchdog state is inconsistent. isKilled:%v, state:%v, curTerm:%v, leaderTerm: %v",
 				rf.killed(), rf.state, rf.currentTerm, term)
 			rf.mu.Unlock()
 			return
@@ -975,7 +978,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 
 		select {
 		case <-timer.C:
-			debug.Debug(debug.DLeader, rf.me, "Watchdog for %v timeout.", server)
+			debug.Debug(debug.DTimer, rf.me, "Watchdog for %v timeout.", server)
 			timer.Reset(timeout)
 			go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
 		case flag := <-ch:
@@ -1007,10 +1010,10 @@ func (rf *Raft) main() {
 		// Do not block inside this switch statement
 		switch state {
 		case Candidate:
-			debug.Debug(debug.DVote, rf.me, "Starting an election...")
+			debug.Debug(debug.DInfo, rf.me, "Starting an election...")
 			go startElection(rf)
 		case Leader:
-			debug.Debug(debug.DLeader, rf.me, "Starting leader routine.")
+			debug.Debug(debug.DInfo, rf.me, "Starting leader routine.")
 			go startLeader(rf)
 		}
 	}

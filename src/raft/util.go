@@ -54,7 +54,7 @@ func DiscoverHigherTerm(rf *Raft, term int) {
 		rf.currentTerm = term
 	}
 	if rf.state != Follower {
-		debug.Debug(debug.DInfo, rf.me, "State change: %v --> %v.", rf.state, Follower)
+		debug.Debug(debug.DState, rf.me, "State change: %v --> %v.", rf.state, Follower)
 		rf.state = Follower
 	}
 
