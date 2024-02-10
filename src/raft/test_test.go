@@ -564,7 +564,7 @@ func TestBackup2B(t *testing.T) {
 	cfg.end()
 }
 
-/* func TestCount2B(t *testing.T) {
+func TestCount2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -672,7 +672,7 @@ loop:
 	}
 
 	cfg.end()
-} */
+}
 
 func TestPersist12C(t *testing.T) {
 	servers := 3
