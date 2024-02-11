@@ -686,8 +686,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	if rf.state != Leader {
 		debug.Debug(debug.DClient, rf.me, "Cannot accept a command at %v state", rf.state)
+		term := rf.currentTerm
 		rf.mu.Unlock()
-		return -1, rf.currentTerm, false
+		return -1, term, false
 	}
 
 	// Adding command to the log.
@@ -918,8 +919,10 @@ func startLeader(rf *Raft) {
 	go rf.Start("no-op") */
 }
 
-func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
+func appendEntriesWrapper(rf *Raft, server int, heartbeat bool) bool {
 	rf.mu.Lock()
+
+	index := rf.nextIndex[server]
 
 	var pervLogIndex int
 	var pervLogTerm int
@@ -962,7 +965,7 @@ func appendEntriesWrapper(rf *Raft, server, index int, heartbeat bool) bool {
 func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 	debug.Debug(debug.DInfo, rf.me, "Starting watchdog for %v.", server)
 	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
-	go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
+	go appendEntriesWrapper(rf, server, true)
 	timeout := time.Duration(100) * time.Millisecond
 	timer := time.NewTimer(timeout)
 	for {
@@ -980,7 +983,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 		case <-timer.C:
 			debug.Debug(debug.DTimer, rf.me, "Watchdog for %v timeout.", server)
 			timer.Reset(timeout)
-			go appendEntriesWrapper(rf, server, rf.nextIndex[server], true)
+			go appendEntriesWrapper(rf, server, true)
 		case flag := <-ch:
 			timer.Reset(timeout)
 			if flag != 1 {
