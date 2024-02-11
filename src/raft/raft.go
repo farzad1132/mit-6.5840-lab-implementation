@@ -392,16 +392,16 @@ type AppendEntriesReply struct {
 Requires Lock.
 */
 func updateCommitIndex(rf *Raft, leaderCommit int) {
-	if leaderCommit > rf.commitIndex {
-		var lastLogIndex int
-		lastEntry := rf.log.GetLast()
-		if lastEntry != nil {
-			lastLogIndex = lastEntry.Index
-		} else {
-			lastLogIndex = 0
-		}
+	var lastLogIndex int
+	lastEntry := rf.log.GetLast()
+	if lastEntry != nil {
+		lastLogIndex = lastEntry.Index
+	} else {
+		lastLogIndex = 0
+	}
 
-		newCommitIndex := min(leaderCommit, lastLogIndex)
+	newCommitIndex := min(leaderCommit, lastLogIndex)
+	if newCommitIndex > rf.commitIndex {
 		debug.Debug(debug.DCommit, rf.me, "Updating commitIndex: %v --> %v.", rf.commitIndex, newCommitIndex)
 		rf.commitIndex = newCommitIndex
 	}
