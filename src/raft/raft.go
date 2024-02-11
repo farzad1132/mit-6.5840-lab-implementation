@@ -330,6 +330,12 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	rf.mu.Lock()
 	//defer rf.mu.Unlock()
 
+	if args.Term != rf.currentTerm {
+		debug.Debug(debug.DConsist, rf.me, "Inconsistent current and args term in RequestVote handler.")
+		rf.mu.Unlock()
+		return false
+	}
+
 	// Check if there are greater Terms
 	if reply.Term > rf.currentTerm {
 		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", reply.Term, rf.currentTerm)
