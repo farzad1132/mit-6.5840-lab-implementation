@@ -539,6 +539,20 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	// Caller procedure
 	rf.mu.Lock()
 
+	// Consistency checks
+	if args.Term != rf.currentTerm {
+		debug.Debug(debug.DConsist, rf.me, "Inconsistent current and args term in AppendEntries handler.")
+		rf.mu.Unlock()
+		return false
+	}
+
+	if rf.killed() || rf.state != Leader {
+		debug.Debug(debug.DConsist, rf.me, "Consistency check failed. isKilled:%v, state:%v",
+			rf.killed(), rf.state)
+		rf.mu.Unlock()
+		return false
+	}
+
 	// Check if there are greater Terms
 	if reply.Term > rf.currentTerm {
 		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", reply.Term, rf.currentTerm)
@@ -547,11 +561,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		DiscoverHigherTerm(rf, reply.Term)
 		rf.mu.Unlock()
 		return false
-	}
-
-	if rf.killed() || rf.state != Leader {
-		debug.Debug(debug.DLeader, rf.me, "Consistency check failed. isKilled:%v, state:%v",
-			rf.killed(), rf.state)
+	} else if reply.Term < rf.currentTerm {
+		debug.Debug(debug.DConsist, rf.me, "Received AppendEntries response having old term (cur:%v, response:%v).",
+			rf.currentTerm, reply.Term)
 		rf.mu.Unlock()
 		return false
 	}
