@@ -317,17 +317,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, ch chan int) bool {
-	ok := false
-
-	for !ok && !rf.killed() {
-		// Check if conditions are met.
-		rf.mu.Lock()
-		if rf.state != Candidate || rf.currentTerm != args.Term {
-			rf.mu.Unlock()
-			return false
-		}
+	rf.mu.Lock()
+	if args.Term != rf.currentTerm || rf.state != Candidate || rf.killed() {
 		rf.mu.Unlock()
-		ok = rf.peers[server].Call("Raft.RequestVote", args, reply)
+		return false
+	}
+	rf.mu.Unlock()
+	debug.Debug(debug.DRPC, rf.me, "Sending RequestVote to %v.", server)
+	if ok := rf.peers[server].Call("Raft.RequestVote", args, reply); !ok {
+		return false
 	}
 	debug.Debug(debug.DRPC, rf.me, "Received RequestVote response from %v.", server)
 
@@ -335,8 +333,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	rf.mu.Lock()
 	//defer rf.mu.Unlock()
 
-	if args.Term != rf.currentTerm {
-		debug.Debug(debug.DConsist, rf.me, "Inconsistent current and args term in RequestVote handler.")
+	if args.Term != rf.currentTerm || rf.state != Candidate || rf.killed() {
+		debug.Debug(debug.DConsist, rf.me, "Inconsistent RequestVote response. args.Term:%v, curTerm:%v, state:%v, isKilled:%v",
+			args.Term, rf.currentTerm, rf.state, rf.killed())
 		rf.mu.Unlock()
 		return false
 	}
