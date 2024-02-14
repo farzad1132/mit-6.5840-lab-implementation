@@ -737,7 +737,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Notifying watchdogs
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
-			rf.watchdogChannels[i] <- 0
+			chanMap[i] <- 2
 		}
 	}
 	debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
