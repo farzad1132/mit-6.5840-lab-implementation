@@ -638,6 +638,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	updateLastApplied(rf)
 
 	// Notify the watchdog
+	ch := rf.watchdogChannels[server]
 	rf.mu.Unlock()
 	//debug.Debug(debug.DLeader, rf.me, "Sending notification to %v's watchdog.", server)
 	var flag int
@@ -646,10 +647,10 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	} else {
 		flag = 0
 	}
-	rf.watchdogChannels[server] <- flag
+	ch <- flag
 	//debug.Debug(debug.DLeader, rf.me, "Notified %v's watchdog.", server)
 
-	return ok
+	return true
 }
 
 /*
