@@ -939,17 +939,23 @@ func startLeader(rf *Raft) {
 		}
 	}
 	curTerm := rf.currentTerm
-	rf.mu.Unlock()
 
-	debug.Debug(debug.DInfo, rf.me, "Starting watchdogs ...")
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
 			ch := make(chan int)
 			rf.watchdogChannels[i] = ch
-			go instanceWatchDog(i, rf, curTerm, ch)
 		}
 	}
 
+	// go leaderTimeoutCheck(rf, rf.currentTerm)
+
+	rf.mu.Unlock()
+	debug.Debug(debug.DInfo, rf.me, "Starting watchdogs ...")
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			go instanceWatchDog(i, rf, curTerm)
+		}
+	}
 	// TODO: Replace this no-op command with initial heartbeat.
 	/* // Committing a no-op command upon winning the election.
 	go rf.Start("no-op") */
