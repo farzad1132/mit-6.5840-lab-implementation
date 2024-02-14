@@ -415,9 +415,7 @@ func updateCommitIndex(rf *Raft, leaderCommit int) {
 // Requires Lock.
 func updateLastApplied(rf *Raft) {
 	if rf.commitIndex > rf.lastApplied {
-		debug.Debug(debug.DCommit, rf.me, "Updating lastApplied: %v --> %v.",
-			rf.lastApplied, rf.commitIndex)
-
+		oldLastApplied := rf.lastApplied
 		updateCount := rf.commitIndex - rf.lastApplied
 		for i := 0; i < updateCount; i++ {
 			rf.lastApplied += 1
@@ -435,6 +433,8 @@ func updateLastApplied(rf *Raft) {
 			}
 			//debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", rf.lastApplied)
 		}
+		debug.Debug(debug.DCommit, rf.me, "Updated lastApplied: %v --> %v.",
+			oldLastApplied, rf.lastApplied)
 	}
 
 }
