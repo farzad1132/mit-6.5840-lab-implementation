@@ -525,17 +525,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	updateLastApplied(rf)
 }
 
-// This method should have an upper level handler to implement replication logic (2B) TODO.
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	debug.Debug(debug.DRPC, rf.me, "Sending AppendEntries to %v.", server)
 	rf.mu.Lock()
-	if args.Term != rf.currentTerm || rf.state != Leader {
+	if rf.currentTerm != args.Term || rf.state != Leader || rf.killed() {
 		rf.mu.Unlock()
 		return false
 	}
 	rf.mu.Unlock()
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	if !ok {
+	if ok := rf.peers[server].Call("Raft.AppendEntries", args, reply); !ok {
 		return false
 	}
 	debug.Debug(debug.DRPC, rf.me, "Received AppendEntries response from %v.", server)
