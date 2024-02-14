@@ -961,7 +961,7 @@ func startLeader(rf *Raft) {
 	go rf.Start("no-op") */
 }
 
-func appendEntriesWrapper(rf *Raft, server int, heartbeat bool) bool {
+func appendEntriesWrapper(rf *Raft, server int) bool {
 	rf.mu.Lock()
 
 	index := rf.nextIndex[server]
@@ -1007,7 +1007,7 @@ func appendEntriesWrapper(rf *Raft, server int, heartbeat bool) bool {
 func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 	debug.Debug(debug.DInfo, rf.me, "Starting watchdog for %v.", server)
 	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
-	go appendEntriesWrapper(rf, server, true)
+	go appendEntriesWrapper(rf, server)
 	timeout := time.Duration(100) * time.Millisecond
 	timer := time.NewTimer(timeout)
 	for {
@@ -1025,7 +1025,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 		case <-timer.C:
 			debug.Debug(debug.DTimer, rf.me, "Watchdog for %v timeout.", server)
 			timer.Reset(timeout)
-			go appendEntriesWrapper(rf, server, true)
+			go appendEntriesWrapper(rf, server)
 		case flag := <-ch:
 			timer.Reset(timeout)
 			if flag != 1 {
