@@ -601,14 +601,22 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	} else {
 		oldNextIndex := rf.nextIndex[server]
 		if reply.XIndex == -1 && reply.XTerm == -1 {
-			rf.nextIndex[server] = min(1, reply.XLen)
+			if reply.XLen < 1 {
+				rf.nextIndex[server] = 1
+			} else {
+				rf.nextIndex[server] = reply.XLen
+			}
 		} else if !rf.log.HasTerm(reply.XTerm) {
 			rf.nextIndex[server] = reply.XIndex
 		} else {
 			if last := rf.log.LastIndexOfTerm(reply.XTerm); last != -1 {
 				rf.nextIndex[server] = last
 			} else {
-				rf.nextIndex[server] = min(1, reply.XLen)
+				if reply.XLen < 1 {
+					rf.nextIndex[server] = 1
+				} else {
+					rf.nextIndex[server] = reply.XLen
+				}
 			}
 
 		}
