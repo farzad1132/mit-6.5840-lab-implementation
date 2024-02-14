@@ -725,6 +725,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	debug.Debug(debug.DLeader, rf.me, "Added the new command to log.")
 
 	lastEntry := rf.log.GetLast()
+	chanMap := make(map[int]chan int)
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			chanMap[i] = rf.watchdogChannels[i]
+		}
+	}
+
 	rf.mu.Unlock()
 
 	// Notifying watchdogs
