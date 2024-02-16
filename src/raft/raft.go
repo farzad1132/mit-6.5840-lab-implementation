@@ -97,7 +97,6 @@ func (l *Log) GetLast() *LogEntry {
 }
 
 func (l *Log) DeleteFrom(index, me int) {
-	// TODO: Check if it works properly
 	debug.Debug(debug.DDrop, me, "Deleting Entries from index:%v.", index)
 	l.Entries = l.Entries[:index-1]
 	//debug.Debug(debug.DInfo, me, "Tmp: Entries: %+v.", l.Entries)
@@ -279,9 +278,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			debug.Debug(debug.DVote, rf.me, "Vote granted to %v.", args.CandidateId)
 		} else {
 			reply.VoteGranted = false
-			// TODO: check this line (for the scenario that you have voted for a candidate but their log now
-			// is not up-to-date)
-			//rf.votedFor = -1
 			debug.Debug(debug.DConsist, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%+v)), vote rejected.",
 				args.LastLogIndex, args.LastLogTerm, rf.log.GetLast())
 		}
