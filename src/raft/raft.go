@@ -725,22 +725,30 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	debug.Debug(debug.DLeader, rf.me, "Added the new command to log.")
 
 	lastEntry := rf.log.GetLast()
-	chanMap := make(map[int]chan int)
-	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
-			chanMap[i] = rf.watchdogChannels[i]
-		}
-	}
 
 	rf.mu.Unlock()
 
-	// Notifying watchdogs
-	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
-			chanMap[i] <- 2
+	/* go func(rf *Raft) {
+		chanMap := make(map[int]chan int)
+		rf.mu.Lock()
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				chanMap[i] = rf.watchdogChannels[i]
+			}
 		}
-	}
-	debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
+		rf.mu.Unlock()
+		// Notifying watchdogs
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				select {
+				case chanMap[i] <- 2:
+				case <-time.After(5 * time.Millisecond):
+					return
+				}
+			}
+		}
+		debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
+	}(rf) */
 
 	return lastEntry.Index, lastEntry.Term, true
 }
