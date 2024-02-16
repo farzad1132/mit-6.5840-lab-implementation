@@ -801,36 +801,12 @@ func (rf *Raft) ticker() {
 				// debug.Debug(debug.DInfo, rf.me, "Sending notification to main.")
 				rf.controlCh <- Candidate
 			}
-		} else {
-			leaderTimeoutCheck(rf, electionTimeout)
 		}
 
 		rf.mu.Unlock()
 
-		// TODO: Currently, out time step to check the election timer is 10 ms.
+		// Currently, our timestep to check the election timer is 10 ms.
 		time.Sleep(time.Duration(10) * time.Millisecond)
-	}
-}
-
-// Requires the lock
-func leaderTimeoutCheck(rf *Raft, timeout int64) {
-	counter := 1
-	for i, contact := range rf.lastInstanceContact {
-		if i == rf.me {
-			continue
-		}
-		contactDuration := time.Since(contact).Milliseconds()
-		if contactDuration < timeout {
-			counter += 1
-		}
-	}
-
-	if counter <= len(rf.peers)/2 {
-		// Leader state is not valid
-		debug.Debug(debug.DInfo, rf.me, "Leader cannot reach majority (partition size:%v)", counter)
-		debug.Debug(debug.DState, rf.me, "State change: %v --> Follower.", rf.state)
-		rf.state = Follower
-		rf.controlCh <- Follower
 	}
 }
 
