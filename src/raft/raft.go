@@ -208,7 +208,7 @@ func (rf *Raft) readPersist(data []byte) {
 	var votedFor int
 	var log Log
 	if d.Decode(&curTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&log) != nil {
-		err := "Error reading persisted state."
+		err := "Error: reading persisted state."
 		debug.Debug(debug.DError, rf.me, err)
 		panic(err)
 	} else {
@@ -422,7 +422,7 @@ func updateLastApplied(rf *Raft) {
 			//debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
 			entry, ok := rf.log.Get(rf.lastApplied)
 			if !ok {
-				err := fmt.Sprintf("No entry at index:%v.", rf.lastApplied)
+				err := fmt.Sprintf("Error: No entry at index:%v.", rf.lastApplied)
 				debug.Debug(debug.DError, rf.me, err)
 				panic(err)
 			}
@@ -625,7 +625,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				server, oldNextIndex, rf.nextIndex[server])
 		}
 		if rf.nextIndex[server] < 1 {
-			err := fmt.Sprintf("Invalid nextIndex:%v for server:%v.", rf.nextIndex[server], server)
+			err := fmt.Sprintf("Error: Invalid nextIndex:%v for server:%v.", rf.nextIndex[server], server)
 			debug.Debug(debug.DError, rf.me, err)
 			panic(err)
 		}
