@@ -59,6 +59,7 @@ func DiscoverHigherTerm(rf *Raft, term int) {
 	}
 
 	rf.votedFor = -1
+	rf.persist()
 	// Notify main routine
 	rf.controlCh <- Follower
 }

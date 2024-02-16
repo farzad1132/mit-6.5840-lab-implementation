@@ -266,12 +266,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// Fallback to Follower
 		debug.Debug(debug.DTerm, rf.me, "Discovered greater Term (%v > %v)", args.Term, rf.currentTerm)
 		DiscoverHigherTerm(rf, args.Term)
+		rf.votedFor = -1
+		rf.persist()
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 		if CheckLogIsUpToDate(rf, args.LastLogTerm, args.LastLogIndex) {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateId
+			rf.persist()
 			ResetElectionTimer(rf)
 			debug.Debug(debug.DVote, rf.me, "Vote granted to %v.", args.CandidateId)
 		} else {
@@ -492,13 +495,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if entry.Term != args.PervLogTerm {
 		debug.Debug(debug.DConsist, rf.me, "Term of entry at index:%v is inconsistent. (self:%v, other:%v)",
 			args.PervLogIndex, entry.Term, args.PervLogTerm)
-		rf.log.DeleteFrom(entry.Index, rf.me)
+		reply.XIndex = rf.log.FirstIndexOfTerm(entry.Term)
 		reply.Success = false
 		reply.XTerm = entry.Term
-		reply.XIndex = rf.log.FirstIndexOfTerm(entry.Term)
 		if reply.XIndex == -1 {
-			reply.XLen = len(rf.log.Entries)
+			// Panic due to undesired state.
+			fmt.Printf("logs:")
+			for i := 0; i < len(rf.log.Entries); i++ {
+				fmt.Printf("%+v,", rf.log.Entries[i])
+			}
+			panic(fmt.Sprintf("Error: Could not find first index for term:%v.", entry.Term))
 		}
+		rf.log.DeleteFrom(entry.Index, rf.me)
+		rf.persist()
+
 		updateCommitIndex(rf, args.LeaderCommit)
 		return
 	} else {
@@ -512,11 +522,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if !ok {
 			// We don't have the entry, append it.
 			rf.log.Add(e.Command, e.Term, rf.me)
+			rf.persist()
 		} else {
 			// Consistency check
 			if curEntry.Term != e.Term {
 				rf.log.DeleteFrom(e.Index, rf.me)
 				rf.log.Add(e.Command, e.Term, rf.me)
+				rf.persist()
 			}
 		}
 	}
@@ -722,7 +734,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Adding command to the log.
 	rf.log.Add(command, rf.currentTerm, rf.me)
-	debug.Debug(debug.DLeader, rf.me, "Added the new command to log.")
+	rf.persist()
 
 	lastEntry := rf.log.GetLast()
 
@@ -823,6 +835,7 @@ func startElection(rf *Raft) {
 	result[rf.me] = 0
 	rf.votedFor = rf.me
 	ResetElectionTimer(rf)
+	rf.persist()
 
 	var lastLogIndex int
 	var lastLogTerm int
@@ -1069,11 +1082,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	debug.Init()
 
-	// persistent states
-	rf.currentTerm = 0
-	rf.votedFor = -1
-	rf.log = Log{}
-	rf.log.Entries = []*LogEntry{}
+	// initialize from state persisted before a crash
+	if persistedData := persister.ReadRaftState(); len(persistedData) < 1 {
+		// persistent states
+		rf.currentTerm = 0
+		rf.votedFor = -1
+		rf.log = Log{}
+		rf.log.Entries = []*LogEntry{}
+		debug.Debug(debug.DPersist, rf.me, "Initializing persistent state.")
+	} else {
+		rf.readPersist(persistedData)
+		debug.Debug(debug.DPersist, rf.me, "Reading persistent state: curTerm:%v, votedFor:%v, log:%+v.",
+			rf.currentTerm, rf.votedFor, rf.log)
+	}
 
 	// volatile states
 	rf.commitIndex = 0
@@ -1088,9 +1109,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.watchdogChannels = make(map[int]chan int)
 	rf.controlCh = make(chan State)
 	rf.applyCh = applyCh
-
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
