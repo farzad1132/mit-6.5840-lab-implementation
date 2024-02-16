@@ -987,7 +987,7 @@ func appendEntriesWrapper(rf *Raft, server int) bool {
 	return rf.sendAppendEntries(server, &args, &reply)
 }
 
-func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
+func instanceWatchDog(server int, rf *Raft, term int) {
 	debug.Debug(debug.DInfo, rf.me, "Starting watchdog for %v.", server)
 	// TODO: The correct implementation involves committing a no-op command instead of initial heartbeat.
 	go appendEntriesWrapper(rf, server)
@@ -1002,6 +1002,7 @@ func instanceWatchDog(server int, rf *Raft, term int, ch chan int) {
 			rf.mu.Unlock()
 			return
 		}
+		ch := rf.watchdogChannels[server]
 		rf.mu.Unlock()
 
 		select {
