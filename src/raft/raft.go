@@ -1011,16 +1011,18 @@ func instanceWatchDog(server int, rf *Raft, term int) {
 			timer.Reset(timeout)
 			go appendEntriesWrapper(rf, server)
 		case flag := <-ch:
-			timer.Reset(timeout)
-			if flag != 1 {
-				// previous AppendEntry RPC was not a heartbeat.
-				//debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to send a AppendEntries",
-				//	server)
-				go appendEntriesWrapper(rf, server, rf.nextIndex[server], false)
-			} else {
+			switch flag {
+			case 0:
 				// previous AppendEntry RPC was a heartbeat.
-				//debug.Debug(debug.DLeader, rf.me, "Receiving notification for %v's to *not* send a AppendEntries",
-				//	server)
+				// timer.Reset(timeout)
+			case 1:
+				// previous AppendEntry RPC was not a heartbeat.
+				// timer.Reset(timeout)
+				// go appendEntriesWrapper(rf, server)
+			case 2:
+				// New entry
+				timer.Reset(timeout)
+				go appendEntriesWrapper(rf, server)
 			}
 
 		}
