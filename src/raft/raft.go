@@ -61,74 +61,6 @@ const (
 	Leader    State = "Leader"
 )
 
-type LogEntry struct {
-	Term    int
-	Index   int
-	Command interface{}
-}
-
-type Log struct {
-	Entries []*LogEntry
-}
-
-func (l *Log) Add(command interface{}, term, me int) bool {
-	entry := LogEntry{
-		Term:    term,
-		Command: command,
-		Index:   len(l.Entries) + 1,
-	}
-	l.Entries = append(l.Entries, &entry)
-	debug.Debug(debug.DRep, me, "Added command:%v with term:%v to index:%v", command, term, len(l.Entries))
-	return true
-}
-
-func (l *Log) Get(index int) (*LogEntry, bool) {
-	if index > len(l.Entries) || index < 1 {
-		return nil, false
-	}
-	return l.Entries[index-1], true
-}
-
-func (l *Log) GetLast() *LogEntry {
-	if len(l.Entries) < 1 {
-		return nil
-	}
-	return l.Entries[len(l.Entries)-1]
-}
-
-func (l *Log) DeleteFrom(index, me int) {
-	debug.Debug(debug.DDrop, me, "Deleting Entries from index:%v.", index)
-	l.Entries = l.Entries[:index-1]
-	//debug.Debug(debug.DInfo, me, "Tmp: Entries: %+v.", l.Entries)
-}
-
-func (l *Log) FirstIndexOfTerm(term int) int {
-	for _, e := range l.Entries {
-		if e.Term == term {
-			return e.Index
-		}
-	}
-	return -1
-}
-
-func (l *Log) LastIndexOfTerm(term int) int {
-	for i := len(l.Entries) - 1; i >= 0; i-- {
-		if l.Entries[i].Term == term {
-			return l.Entries[i].Index
-		}
-	}
-	return -1
-}
-
-func (l *Log) HasTerm(term int) bool {
-	for _, e := range l.Entries {
-		if e.Term == term {
-			return true
-		}
-	}
-	return false
-}
-
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -478,11 +410,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// If you don't have an entry at PervLogIndex, return false
 	if !ok {
 		debug.Debug(debug.DLog, rf.me, "Does not have entry at index:%v. (Log len:%v)",
-			args.PervLogIndex, len(rf.log.Entries))
+			args.PervLogIndex, rf.log.Len())
 		reply.Success = false
 		reply.XIndex = -1
 		reply.XTerm = -1
-		reply.XLen = len(rf.log.Entries)
+		reply.XLen = rf.log.Len()
 		updateCommitIndex(rf, args.LeaderCommit)
 		return
 	}
@@ -496,10 +428,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.XTerm = entry.Term
 		if reply.XIndex == -1 {
 			// Panic due to undesired state.
-			fmt.Printf("logs:")
-			for i := 0; i < len(rf.log.Entries); i++ {
-				fmt.Printf("%+v,", rf.log.Entries[i])
-			}
+			rf.log.PrintAll()
 			panic(fmt.Sprintf("Error: Could not find first index for term:%v.", entry.Term))
 		}
 		rf.log.DeleteFrom(entry.Index, rf.me)
@@ -1084,7 +1013,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.currentTerm = 0
 		rf.votedFor = -1
 		rf.log = Log{}
-		rf.log.Entries = []*LogEntry{}
+		rf.log.Initialize()
 		debug.Debug(debug.DPersist, rf.me, "Initializing persistent state.")
 	} else {
 		rf.readPersist(persistedData)
