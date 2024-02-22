@@ -14,13 +14,25 @@ type LogEntry struct {
 }
 
 type Log struct {
-	Entries       map[int]*LogEntry // Keys are indices
-	SortedIndices []int
+	Entries           map[int]*LogEntry // Keys are indices
+	SortedIndices     []int
+	SnapshotLastIndex int
+	SnapshotLastTerm  int
+	HaveSnapshot      bool
 }
 
 func (l *Log) Initialize() {
 	l.Entries = make(map[int]*LogEntry)
 	l.SortedIndices = make([]int, 0)
+	l.SnapshotLastIndex = -1
+	l.SnapshotLastTerm = -1
+	l.HaveSnapshot = false
+}
+
+func (l *Log) InstallSnapshot(lastIndex, LastTerm int) {
+	l.SnapshotLastIndex = lastIndex
+	l.SnapshotLastTerm = LastTerm
+	l.HaveSnapshot = true
 }
 
 func (l *Log) Len() int {
@@ -28,16 +40,20 @@ func (l *Log) Len() int {
 }
 
 func (l *Log) LastIndex() int {
-	len := len(l.SortedIndices)
+	len := l.Len()
 	if len < 1 {
-		return -1
+		if l.HaveSnapshot {
+			return l.SnapshotLastIndex
+		} else {
+			return 0
+		}
 	} else {
 		return l.SortedIndices[len-1]
 	}
 }
 
 func (l *Log) Add(command interface{}, term, me int) bool {
-	newIndex := l.Len() + 1
+	newIndex := l.LastIndex() + 1
 	entry := LogEntry{
 		Term:    term,
 		Command: command,
@@ -67,6 +83,21 @@ func (l *Log) GetLast() *LogEntry {
 	}
 }
 
+// This operation is snapshot-aware
+func (l *Log) GetLastIndexTerm() (index int, term int) {
+	len := l.Len()
+	if len < 1 {
+		if l.HaveSnapshot {
+			return l.SnapshotLastIndex, l.SnapshotLastTerm
+		} else {
+			return 0, 0
+		}
+	} else {
+		e := l.GetLast()
+		return e.Index, e.Term
+	}
+}
+
 func (l *Log) DeleteFrom(index, me int) {
 	debug.Debug(debug.DDrop, me, "Deleting Entries from index:%v.", index)
 	origList := make([]int, len(l.SortedIndices))
@@ -85,7 +116,36 @@ func (l *Log) DeleteFrom(index, me int) {
 	slices.Sort(l.SortedIndices)
 }
 
+func (l *Log) DeleteTo(index, me int) {
+	debug.Debug(debug.DDrop, me, "Deleting Entries up to index:%v.", index)
+	origList := make([]int, len(l.SortedIndices))
+	if n := copy(origList, l.SortedIndices); n != len(l.SortedIndices) {
+		panic("Error: Could not copy all elements of SortedIndices.")
+	}
+	for realI := len(origList) - 1; realI >= 0; realI-- {
+		i := origList[realI]
+		if i <= index {
+			l.SortedIndices = l.SortedIndices[realI+1:]
+			for j := 0; j <= realI; j++ {
+				delete(l.Entries, origList[j])
+			}
+			break
+		}
+	}
+	slices.Sort(l.SortedIndices)
+}
+
+func (l *Log) DeleteAll(me int) {
+	debug.Debug(debug.DDrop, me, "Deleting all entries.")
+	l.Entries = make(map[int]*LogEntry)
+	l.SortedIndices = make([]int, 0)
+}
+
+// This operation is snapshot-aware
 func (l *Log) FirstIndexOfTerm(term int) int {
+	if l.HaveSnapshot && term <= l.SnapshotLastTerm {
+		return l.SnapshotLastIndex
+	}
 	for _, index := range l.SortedIndices {
 		if e, ok := l.Get(index); ok {
 			if e.Term == term {
@@ -98,7 +158,11 @@ func (l *Log) FirstIndexOfTerm(term int) int {
 	return -1
 }
 
+// This operation is snapshot-aware
 func (l *Log) LastIndexOfTerm(term int) int {
+	if l.HaveSnapshot && term <= l.SnapshotLastTerm {
+		return l.SnapshotLastIndex
+	}
 	for i := len(l.SortedIndices) - 1; i >= 0; i-- {
 		index := l.SortedIndices[i]
 		if e, ok := l.Get(index); ok {
@@ -112,11 +176,15 @@ func (l *Log) LastIndexOfTerm(term int) int {
 	return -1
 }
 
+// This operation is snapshot-aware
 func (l *Log) HasTerm(term int) bool {
 	for _, e := range l.Entries {
 		if e.Term == term {
 			return true
 		}
+	}
+	if l.HaveSnapshot && l.SnapshotLastTerm == term {
+		return true
 	}
 	return false
 }

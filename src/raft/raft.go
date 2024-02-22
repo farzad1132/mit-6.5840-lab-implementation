@@ -210,8 +210,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			debug.Debug(debug.DVote, rf.me, "Vote granted to %v.", args.CandidateId)
 		} else {
 			reply.VoteGranted = false
-			debug.Debug(debug.DConsist, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%+v)), vote rejected.",
-				args.LastLogIndex, args.LastLogTerm, rf.log.GetLast())
+			lastIndex, lastTerm := rf.log.GetLastIndexTerm()
+			debug.Debug(debug.DConsist, rf.me, "Log is not up-to-date (lastEntries: candidate:(%v, %v), me:(%v, %v)), vote rejected.",
+				args.LastLogIndex, args.LastLogTerm, lastIndex, lastTerm)
 		}
 	} else {
 		reply.VoteGranted = false
@@ -327,13 +328,7 @@ type AppendEntriesReply struct {
 Requires Lock.
 */
 func updateCommitIndex(rf *Raft, leaderCommit int) {
-	var lastLogIndex int
-	lastEntry := rf.log.GetLast()
-	if lastEntry != nil {
-		lastLogIndex = lastEntry.Index
-	} else {
-		lastLogIndex = 0
-	}
+	lastLogIndex, _ := rf.log.GetLastIndexTerm()
 
 	newCommitIndex := min(leaderCommit, lastLogIndex)
 	if newCommitIndex > rf.commitIndex {
@@ -351,6 +346,9 @@ func updateLastApplied(rf *Raft) {
 		for i := 0; i < updateCount; i++ {
 			rf.lastApplied += 1
 			//debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
+			if rf.log.HaveSnapshot && rf.lastApplied <= rf.log.SnapshotLastIndex {
+				continue
+			}
 			entry, ok := rf.log.Get(rf.lastApplied)
 			if !ok {
 				err := fmt.Sprintf("Error: No entry at index:%v.", rf.lastApplied)
@@ -403,12 +401,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			Index: 0,
 		}
 		ok = true
+	} else if rf.log.HaveSnapshot && args.PervLogIndex == rf.log.SnapshotLastIndex &&
+		args.PervLogTerm == rf.log.SnapshotLastTerm {
+		entry = &LogEntry{
+			Term:  rf.log.SnapshotLastTerm,
+			Index: rf.log.SnapshotLastIndex,
+		}
+		ok = true
 	} else {
 		entry, ok = rf.log.Get(args.PervLogIndex)
 	}
 
 	// If you don't have an entry at PervLogIndex, return false
 	if !ok {
+		if rf.log.HaveSnapshot && args.PervLogIndex <= rf.log.SnapshotLastIndex {
+			panic(fmt.Sprintf("Error: (AppendEntries) Invalid entry access with snapshot. SnapshotLastIndex:%v, PervLogIndex:%v",
+				rf.log.SnapshotLastIndex, args.PervLogIndex))
+		}
 		debug.Debug(debug.DLog, rf.me, "Does not have entry at index:%v. (Log len:%v)",
 			args.PervLogIndex, rf.log.Len())
 		reply.Success = false
@@ -762,16 +771,7 @@ func startElection(rf *Raft) {
 	ResetElectionTimer(rf)
 	rf.persist()
 
-	var lastLogIndex int
-	var lastLogTerm int
-	lastEntry := rf.log.GetLast()
-	if lastEntry != nil {
-		lastLogIndex = lastEntry.Index
-		lastLogTerm = lastEntry.Term
-	} else {
-		lastLogIndex = 0
-		lastLogTerm = 0
-	}
+	lastLogIndex, lastLogTerm := rf.log.GetLastIndexTerm()
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -844,14 +844,7 @@ Kicks off watchdogs required for sending AppendEntry RPCs to Followers. It doesn
 func startLeader(rf *Raft) {
 	rf.mu.Lock()
 
-	// Initializing volatile state of the leader
-	var lastLogIndex int
-	lastEntry := rf.log.GetLast()
-	if lastEntry != nil {
-		lastLogIndex = lastEntry.Index
-	} else {
-		lastLogIndex = 0
-	}
+	lastLogIndex, _ := rf.log.GetLastIndexTerm()
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -894,8 +887,35 @@ func appendEntriesWrapper(rf *Raft, server int) bool {
 		pervLogIndex = pervEntry.Index
 		pervLogTerm = pervEntry.Term
 	} else {
-		pervLogIndex = 0
-		pervLogTerm = 0
+		if !rf.log.HaveSnapshot {
+			// Log is empty
+
+			pervLogIndex = 0
+			pervLogTerm = 0
+		} else if rf.log.SnapshotLastIndex == index-1 {
+			pervLogIndex = rf.log.SnapshotLastIndex
+			pervLogTerm = rf.log.SnapshotLastTerm
+
+		} else if rf.log.SnapshotLastIndex > index-1 {
+			// Log is trimmed, so send InstallSnapshot
+
+			args := InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.log.SnapshotLastIndex,
+				LastIncludedTerm:  rf.log.SnapshotLastTerm,
+				Snapshot:          rf.snapshot,
+			}
+			reply := InstallSnapshotReply{}
+			go rf.sendInstallSnapshot(server, &args, &reply)
+			rf.mu.Unlock()
+			return false
+		} else {
+			panic(fmt.Sprintf(
+				"Error: (appendEntriesWrapper) Previous entry not found and index:%v is larger than SnapshotLastIndex: %v",
+				index-1, rf.log.SnapshotLastIndex))
+		}
+
 	}
 
 	entries := []LogEntry{}
