@@ -17,30 +17,25 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 } */
 
 /*
-if Log of other is more up-to-date, returns true.
+if Log of other is more up-to-date, returns 1. If two are the same, returns 0.
+Otherwise, returns -1.
 */
-func CheckLogIsUpToDate(rf *Raft, otherTerm, otherIndex int) bool {
-	var lastLogIndex int
-	var lastLogTerm int
-	lastEntry := rf.log.GetLast()
-	if lastEntry != nil {
-		lastLogIndex = lastEntry.Index
-		lastLogTerm = lastEntry.Term
-	} else {
-		lastLogIndex = 0
-		lastLogTerm = 0
-	}
+func CheckLogIsUpToDate(rf *Raft, otherTerm, otherIndex int) int {
+
+	lastLogIndex, lastLogTerm := rf.log.GetLastIndexTerm()
 
 	if otherTerm > lastLogTerm {
-		return true
+		return 1
 	} else if otherTerm == lastLogTerm {
-		if otherIndex >= lastLogIndex {
-			return true
+		if otherIndex > lastLogIndex {
+			return 1
+		} else if otherIndex == lastLogIndex {
+			return 0
 		} else {
-			return false
+			return -1
 		}
 	} else {
-		return false
+		return -1
 	}
 
 }

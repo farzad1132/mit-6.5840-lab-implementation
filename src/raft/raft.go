@@ -202,7 +202,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		if CheckLogIsUpToDate(rf, args.LastLogTerm, args.LastLogIndex) {
+		if CheckLogIsUpToDate(rf, args.LastLogTerm, args.LastLogIndex) >= 0 {
 			reply.VoteGranted = true
 			rf.votedFor = args.CandidateId
 			rf.persist()
