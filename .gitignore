@@ -3,4 +3,5 @@ api.key
 .api.key.trimmed
 *-handin.tar.gz
 debug/
-python_setup/
+python_setup/pretty.egg-info
+*.pyc

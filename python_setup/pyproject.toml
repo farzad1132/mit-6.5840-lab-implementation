@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pretty"
+version = "0.0.1"
+dependencies = [
+    "rich",
+    'typer',
+]
+
+[project.scripts]
+pretty = "pretty.commands:run"
+dstest = "pretty.dstest:run"
