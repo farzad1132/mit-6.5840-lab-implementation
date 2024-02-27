@@ -1127,9 +1127,7 @@ func (rf *Raft) main() {
 	for !rf.killed() {
 
 		// Wait for state transition
-		// debug.Debug(debug.DInfo, rf.me, "Waiting for main notification.")
 		state := <-rf.controlCh
-		//debug.Debug(debug.DInfo, rf.me, "Received a notification from controlCh.")
 
 		// Do not block inside this switch statement
 		switch state {
