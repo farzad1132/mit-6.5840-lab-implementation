@@ -72,8 +72,10 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	state   State
-	applyCh chan ApplyMsg
+	state            State
+	applyCh          chan ApplyMsg
+	internalApplyCh  chan *LogEntry
+	startRateLimiter chan int
 
 	currentTerm int
 	votedFor    int // peer's index (-1 means no vote)
@@ -853,27 +855,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Unlock()
 
-	/* go func(rf *Raft) {
-		chanMap := make(map[int]chan int)
-		rf.mu.Lock()
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				chanMap[i] = rf.watchdogChannels[i]
-			}
-		}
-		rf.mu.Unlock()
-		// Notifying watchdogs
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				select {
-				case chanMap[i] <- 2:
-				case <-time.After(5 * time.Millisecond):
-					return
-				}
-			}
-		}
-		debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
-	}(rf) */
+	go func() {
+		rf.startRateLimiter <- 0
+	}()
 
 	return lastEntry.Index, lastEntry.Term, true
 }
@@ -1032,6 +1016,7 @@ func startLeader(rf *Raft) {
 		}
 	}
 	curTerm := rf.currentTerm
+	go StartRateLimiter(rf, curTerm)
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i != rf.me {
@@ -1122,6 +1107,72 @@ func appendEntriesWrapper(rf *Raft, server int) bool {
 	rf.mu.Unlock()
 
 	return rf.sendAppendEntries(server, &args, &reply)
+}
+
+/*
+This function implements AppendEntries batching functionality. Upon receiving a notification
+from Start(), it waits for 1 ms for following burst of notifications. If timeout happens, it
+will send a notification to watchdogs for sending AppendEntries.
+*/
+func StartRateLimiter(rf *Raft, term int) {
+	timeout := time.Duration(1) * time.Millisecond
+	for {
+		rf.mu.Lock()
+		// Consistency check
+		if rf.killed() || rf.state != Leader || rf.currentTerm != term {
+			debug.Debug(debug.DConsist, rf.me, "Watchdog state is inconsistent. isKilled:%v, state:%v, curTerm:%v, watchdogTerm: %v",
+				rf.killed(), rf.state, rf.currentTerm, term)
+			rf.mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+
+		// Wait for initial notification from Start()
+		<-rf.startRateLimiter
+
+		t := time.NewTimer(timeout)
+		upperT := time.NewTimer(time.Duration(5) * time.Millisecond)
+		// Catch burst of notifications from Start()
+	inner:
+		for {
+			select {
+			case <-t.C:
+				go notifyWatchdogs(rf)
+				break inner
+			case <-rf.startRateLimiter:
+				t.Reset(timeout)
+			case <-upperT.C:
+				go notifyWatchdogs(rf)
+				break inner
+			}
+		}
+
+	}
+
+}
+
+// This function notifies all watchdogs to send AppendEntries RPC
+func notifyWatchdogs(rf *Raft) {
+	chanMap := make(map[int]chan int)
+	rf.mu.Lock()
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			chanMap[i] = rf.watchdogChannels[i]
+		}
+	}
+	rf.mu.Unlock()
+
+	// Notifying watchdogs
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			select {
+			case chanMap[i] <- 2:
+			case <-time.After(5 * time.Millisecond):
+				return
+			}
+		}
+	}
+	debug.Debug(debug.DInfo, rf.me, "Notified all watchdogs.")
 }
 
 func instanceWatchDog(server int, rf *Raft, term int) {
@@ -1232,6 +1283,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastInstanceContact = make(map[int]time.Time)
 	rf.watchdogChannels = make(map[int]chan int)
 	rf.controlCh = make(chan State)
+	rf.internalApplyCh = make(chan *LogEntry)
+	rf.startRateLimiter = make(chan int)
 	rf.applyCh = applyCh
 
 	// start ticker goroutine to start elections
