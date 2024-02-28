@@ -478,7 +478,6 @@ func updateLastApplied(rf *Raft) {
 				break
 			}
 			rf.lastApplied += 1
-			//debug.Debug(debug.DCommit, rf.me, "Applying index:%v.", rf.lastApplied)
 			if rf.log.HaveSnapshot && rf.lastApplied <= rf.log.SnapshotLastIndex {
 				continue
 			}
@@ -488,19 +487,64 @@ func updateLastApplied(rf *Raft) {
 				debug.Debug(debug.DError, rf.me, err)
 				panic(err)
 			}
-			rf.mu.Unlock()
-			rf.applyCh <- ApplyMsg{
-				CommandValid: true,
-				Command:      entry.Command,
-				CommandIndex: entry.Index,
-			}
-			rf.mu.Lock()
-			debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", rf.lastApplied)
+			rf.internalApplyCh <- entry
 		}
 		debug.Debug(debug.DCommit, rf.me, "Updated lastApplied: %v --> %v.",
 			oldLastApplied, rf.lastApplied)
 	}
 
+}
+
+/*
+This function implements two goroutines. One is responsible for receiving new entries to apply from
+AppendEntries handler and queueing them (it won't block in any situation). Other one is responsible
+for reading from the internal queue of entries and applying them (sending them through the applyCh)
+in order (this goroutine might block because the upper-level service might not read from it at all times.
+However, this won't pose any challenges to the functionality of Raft since we have not blocked AppendEntries
+handler and the lock is free)
+*/
+func (rf *Raft) ApplierAgent() {
+	entries := make([]*LogEntry, 0)
+	var mu sync.Mutex
+	ch := make(chan int)
+
+	/* Goroutine responsible for receiving new entries to apply from
+	AppendEntries handler and queueing them */
+	go func() {
+		for !rf.killed() {
+			e := <-rf.internalApplyCh
+			mu.Lock()
+			entries = append(entries, e)
+			mu.Unlock()
+			select {
+			case ch <- 0:
+			default:
+			}
+
+		}
+	}()
+
+	// Code responsible for reading from the internal queue of entries and applying them
+	for {
+		if rf.killed() {
+			return
+		}
+		mu.Lock()
+		for len(entries) < 1 {
+			mu.Unlock()
+			<-ch
+			mu.Lock()
+		}
+		e := entries[0]
+		entries = entries[1:]
+		mu.Unlock()
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      e.Command,
+			CommandIndex: e.Index,
+		}
+		debug.Debug(debug.DCommit, rf.me, "Applied index:%v.", e.Index)
+	}
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -1195,6 +1239,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// starting main routine
 	go rf.main()
+
+	// start applier agent
+	go rf.ApplierAgent()
 
 	debug.Debug(debug.DInfo, rf.me, "Starting Raft...")
 	return rf
