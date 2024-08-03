@@ -88,6 +88,7 @@ git clone git@github.com:farzad1132/mit-6.5840-lab-implementation.git
 go test -run <Regex>
 ```
 Replace `<Regex>` with a part of test names to run those tests. For example this can be `TestPersist12C` or `2B`. (Don't forget about `-timeout` and `-race`)
+
 3. If you want to turn the logs on run the following command
 
 ```bash
